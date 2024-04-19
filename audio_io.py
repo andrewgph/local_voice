@@ -102,8 +102,9 @@ class AudioIO():
         while True:
             # TODO: add echo cancellation here
             latest_audio = self._get_latest_audio()
-            logger.debug(f"Publishing {len(latest_audio)} bytes of audio")
-            await self.pubsub.publish(EventType.HEARD_AUDIO, latest_audio)
+            if latest_audio:
+                logger.debug(f"Publishing {len(latest_audio)} bytes of audio")
+                await self.pubsub.publish(EventType.HEARD_AUDIO, latest_audio)
             # TODO: adjust sleep time based upon how long it the loop took
             await asyncio.sleep(self.publish_interval_ms / 1000)
 
