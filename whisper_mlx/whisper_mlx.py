@@ -199,7 +199,7 @@ class TextDecoder(nn.Module):
             )
 
         x = self.ln(x)
-        return x @ self.token_embedding.weight.T, kv_cache, cross_qk
+        return self.token_embedding.as_linear(x), kv_cache, cross_qk
 
 
 class Whisper(nn.Module):
@@ -286,7 +286,7 @@ def load_model(
     model = Whisper(model_args, dtype)
 
     if quantization is not None:
-        nn.QuantizedLinear.quantize_module(model, **quantization)
+         nn.quantize(model, **quantization)
 
     model.update(weights)
     mx.eval(model.parameters())
