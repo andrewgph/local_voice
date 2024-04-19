@@ -58,10 +58,7 @@ async def main():
     agent = VoiceChatAgent(pubsub, llm_model, llm_tokenizer, VoiceChatAgentConfig())
     
     logging.info("Starting input audio ...")
-    await asyncio.gather(
-        audio_io.start(),
-        agent.run()
-    )
+    await audio_io.start()
    
 if __name__ == '__main__':
     asyncio.run(main())

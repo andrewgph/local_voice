@@ -22,7 +22,7 @@ def input_audio_stream_process(audio_queue, device_name_like=None):
         audio_queue.put((time.time(), time_info, in_data))
         return (None, pyaudio.paContinue)
 
-    logger.debug('Starting input stream')
+    print('Starting input stream')
 
     stream = p.open(
         format=pyaudio.paInt16,
@@ -36,13 +36,13 @@ def input_audio_stream_process(audio_queue, device_name_like=None):
     while stream.is_active():
         time.sleep(0.1)
 
-    logger.debug('Stopping input stream')
+    print('Stopping input stream')
 
     stream.close()
     p.terminate()
 
 def output_audio_stream_process(audio_queue):
-    logger.debug('Starting output stream')
+    print('Starting output stream')
     try:
         pya = pyaudio.PyAudio()
         stream = pya.open(format=pyaudio.paFloat32,
@@ -51,18 +51,18 @@ def output_audio_stream_process(audio_queue):
                                     output=True)
 
         while True:
-            logger.debug('Checking for audio to play')
+            print('Checking for audio to play')
             speech_arr = audio_queue.get()
             if speech_arr is None:
                 break
-            logger.debug('Playing speech')
+            print('Playing speech')
             stream.write(speech_arr.tobytes())
 
         stream.stop_stream()
         stream.close()
         pya.terminate()
     except Exception as e:
-        logger.error(f"Exception in play_speech_process: {str(e)}")
+        print(f"Exception in play_speech_process: {str(e)}")
 
 def find_device_idx(device_name_like=None):
     p = pyaudio.PyAudio()
@@ -84,7 +84,6 @@ class AudioIO():
         self.pubsub = pubsub
         self.device_name_like = device_name_like
         self.publish_interval_ms = publish_interval_ms
-        #self.echo_canceller = EchoCanceller(SAMPLE_RATE, CHANNELS, CHUNK_SIZE)
         self.input_audio_process = None
         self.output_audio_process = None
 
@@ -103,7 +102,9 @@ class AudioIO():
         while True:
             # TODO: add echo cancellation here
             latest_audio = self._get_latest_audio()
+            logger.debug(f"Publishing {len(latest_audio)} bytes of audio")
             await self.pubsub.publish(EventType.HEARD_AUDIO, latest_audio)
+            # TODO: adjust sleep time based upon how long it the loop took
             await asyncio.sleep(self.publish_interval_ms / 1000)
 
     def stop(self):
@@ -121,13 +122,15 @@ class AudioIO():
             self.output_audio_queue.put(speech_arr[i:i+chunk_size])
 
     def stop_playing_audio(self):
-        # logger.debug(f'Stopping audio playback - currently num chunks in queue: {self.output_audio_queue.qsize()}')
         logger.debug(f'Stopping audio playback')
+        count = 0
         while True:
             try:
                 self.output_audio_queue.get(block=False)
+                count += 1
             except:
                 break
+        logger.debug(f'Removed {count} chunks from output queue')
 
     def _get_latest_audio(self):
         chunk_buffer = []

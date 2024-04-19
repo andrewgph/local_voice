@@ -1,3 +1,5 @@
+import asyncio
+from asyncio import Queue
 import numpy as np
 import time
 import mlx.core as mx
@@ -52,9 +54,6 @@ def record_result(audio_arr, text):
 class IncrementalTranscriber:
 
     def __init__(self, pubsub, whisper_mlx_model):
-        self.pubsub = pubsub
-        self.pubsub.subscribe(EventType.HEARD_AUDIO, self.handle_heard_audio)
-
         self.whisper_mlx_model = whisper_mlx_model
         self.tokenizer = get_tokenizer(
             multilingual=whisper_mlx_model.is_multilingual,
@@ -67,42 +66,62 @@ class IncrementalTranscriber:
         self.vad = Vad()
         self.vad.set_mode(3)
 
+        self.event_queue = Queue()
+        self.is_running = False
+        self.transcribe_task = None
+
+        self.pubsub = pubsub
+        self.pubsub.subscribe(EventType.HEARD_AUDIO, self.handle_heard_audio)
+
     async def handle_heard_audio(self, audio_bytes):
-        await self.transcribe(audio_bytes)
-
-    async def transcribe(self, audio_bytes):
-        logger.debug(f"Transcribing {len(audio_bytes)} bytes")
-
-        if len(audio_bytes) == 0:
-            logger.debug("No audio to transcribe")
-            return        
-
-        self.audio_bytes_buffer += audio_bytes
-        audio_bytes_vad_check = self.audio_bytes_buffer[-max(len(audio_bytes), AUDIO_BYTES_VAD_CHECK_SIZE):]
-        logger.debug(f"Audio bytes VAD check: {len(audio_bytes_vad_check)} bytes")
-
-        if not self._vad_check(audio_bytes_vad_check):
-            logger.debug("No recent speech detected")
-
-            first_idx, last_idx = self._speech_idxs(self.audio_bytes_buffer)
-            if first_idx is None or last_idx is None:
-                logger.debug("No speech in audio bytes buffer to transcribe")
-                return
-
-            # TODO: just trim the front for now, more useful to remove silence from beginning
-            trimmed_audio_bytes = self.audio_bytes_buffer[first_idx:]
-            audio_arr = audio_bytes_to_np_array(trimmed_audio_bytes)
-            logger.debug(f"Trimmed audio arr shape: {audio_arr.shape}")
-            self.audio_bytes_buffer = b''
-
-            text = self._transcribe_arr(audio_arr)
-            if text.strip():
-                await self.pubsub.publish(EventType.HEARD_SPEECH, text.strip())
-                record_result(audio_arr, text)
+        logger.debug(f"Handling heard audio {len(audio_bytes)} bytes")
+        await self.event_queue.put(audio_bytes)
+        if not self.is_running:
+            logger.debug("Starting transcriber")
+            self.is_running = True
+            self.transcribe_task = asyncio.create_task(self.transcribe())
         else:
-            # TODO: VAD check might be too sensitive and cause accidental interuptions
-            logger.debug("VAD check found speech")
-            await self.pubsub.publish(EventType.HEARD_SPEAKING, None)
+            logger.debug("Transcriber already running")
+
+    async def transcribe(self):
+        while self.is_running:
+            audio_bytes = await self.event_queue.get()
+
+            logger.debug(f"Transcribing {len(audio_bytes)} bytes")
+
+            if len(audio_bytes) == 0:
+                logger.debug("No audio to transcribe")
+                continue
+
+            self.audio_bytes_buffer += audio_bytes
+            audio_bytes_vad_check = self.audio_bytes_buffer[-max(len(audio_bytes), AUDIO_BYTES_VAD_CHECK_SIZE):]
+            logger.debug(f"Audio bytes VAD check: {len(audio_bytes_vad_check)} bytes")
+
+            if not self._vad_check(audio_bytes_vad_check):
+                logger.debug("No recent speech detected")
+
+                first_idx, last_idx = self._speech_idxs(self.audio_bytes_buffer)
+                if first_idx is None or last_idx is None:
+                    logger.debug("No speech in audio bytes buffer to transcribe")
+                    await self.pubsub.publish(EventType.HEARD_PAUSE, None)
+                    continue
+
+                # TODO: just trim the front for now, more useful to remove silence from beginning
+                trimmed_audio_bytes = self.audio_bytes_buffer[first_idx:]
+                audio_arr = audio_bytes_to_np_array(trimmed_audio_bytes)
+                logger.debug(f"Trimmed audio arr shape: {audio_arr.shape}")
+                self.audio_bytes_buffer = b''
+
+                text = self._transcribe_arr(audio_arr)
+                if text.strip():
+                    await self.pubsub.publish(EventType.HEARD_SPEECH, text.strip())
+                    record_result(audio_arr, text)
+                
+                await self.pubsub.publish(EventType.HEARD_PAUSE, None)
+            else:
+                # TODO: VAD check might be too sensitive and cause accidental interuptions
+                logger.debug("VAD check found speech")
+                await self.pubsub.publish(EventType.HEARD_SPEAKING, None)
 
     def _transcribe_arr(self, audio_arr):
         start_time = time.time()
@@ -187,10 +206,12 @@ class IncrementalTranscriber:
         return first_idx, last_idx
 
     def _vad_check(self, audio_bytes):
-        contains_speech = False
-        # Window size is 160 = 10 ms at 16kHz * 2 bytes per sample
-        window_size = 160 * 2
-        for i in range(0, len(audio_bytes), window_size):
-            contains_speech = contains_speech or self.vad.is_speech(audio_bytes[i:i+window_size], SAMPLING_RATE)
-        return contains_speech
+        window_count = 0
+        speech_count = 0
+        for i in range(0, len(audio_bytes), AUDIO_BYTES_WINDOW_SIZE):
+            window_count += 1
+            if self.vad.is_speech(audio_bytes[i:i+AUDIO_BYTES_WINDOW_SIZE], SAMPLING_RATE):
+                speech_count += 1
+        logger.debug(f"VAD found speech in {speech_count} / {window_count} windows")
+        return speech_count > 0
 
