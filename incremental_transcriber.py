@@ -20,8 +20,8 @@ SAMPLING_RATE = 16000
 
 # Window size is 160 = 10 ms at 16kHz * 2 bytes per sample
 AUDIO_BYTES_WINDOW_SIZE = 160 * 2
-# Check last 100ms for VAD check for pause
-AUDIO_BYTES_VAD_CHECK_SIZE = AUDIO_BYTES_WINDOW_SIZE * 10
+# Check last 50ms for VAD to identify pauses
+AUDIO_BYTES_VAD_CHECK_SIZE = AUDIO_BYTES_WINDOW_SIZE * 5
 
 # Model can take up to 3000 mel frames (30s)
 MAX_MEL_FRAMES = 3000
