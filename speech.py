@@ -22,7 +22,7 @@ class SpeechGenerator:
         self.speaker_embedding = torch.tensor(np.load("/Users/andrew/Downloads/cmu_us_slt_arctic-wav-arctic_a0508.npy")).unsqueeze(0)
         
         self.pubsub = pubsub
-        self.pubsub.subscribe(EventType.HEARD_SPEAKING, self.handle_heard_speaking)
+        self.pubsub.subscribe(EventType.HEARD_SPEECH, self.handle_heard_speech)
         self.pubsub.subscribe(EventType.RESPONSE_TEXT_GENERATED, self.handle_response_text_generated)
         self.is_generating_speech = False
         self.discard_generated_speech = False
@@ -42,8 +42,8 @@ class SpeechGenerator:
             self.play_speech(speech_arr)
         await self.pubsub.publish(EventType.RESPONSE_SPEECH_GENERATED, None)
 
-    async def handle_heard_speaking(self, data):
-        logger.debug(f"Handling heard speaking - stopping any speech")
+    async def handle_heard_speech(self, data):
+        logger.debug(f"Handling heard speech - stopping any speech")
         if self.is_generating_speech:
             self.discard_generated_speech = True
         self.stop_speaking()

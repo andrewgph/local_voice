@@ -182,13 +182,13 @@ class VoiceChatAgent:
 
         while True:
             # Pause to let other tasks process
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0)
 
             if self.is_heard_speaking:
                 # Wait to see if new speech is heard, response will be cancelled in that case
                 # TODO: this could be based upon a pause flag
                 logger.debug("Heard speaking while generating response - waiting for pause")
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0)
                 logger.debug("Resuming response generation after pause for user speaking")
                 continue
 
