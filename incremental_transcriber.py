@@ -70,6 +70,13 @@ class IncrementalTranscriber:
         self.is_running = False
         self.transcribe_task = None
 
+        # Cached audio prefix to improve short audio transcription
+        self.audio_prefix = {
+            "result_logprob": 0,
+            "tokens": [],
+            "np_arr": np.array([]),
+        }
+
         self.pubsub = pubsub
         self.pubsub.subscribe(EventType.HEARD_AUDIO, self.handle_heard_audio)
 
@@ -127,7 +134,8 @@ class IncrementalTranscriber:
         start_time = time.time()
 
         audio_arr = nr.reduce_noise(y=audio_arr, sr=SAMPLING_RATE)
-        mel = audio.log_mel_spectrogram(audio_arr, self.whisper_mlx_model.dims.n_mels)
+        prefixed_audio_arr = np.concatenate([self.audio_prefix["np_arr"], audio_arr])
+        mel = audio.log_mel_spectrogram(prefixed_audio_arr, self.whisper_mlx_model.dims.n_mels)
         mel = mel.reshape(1, *mel.shape)
 
         num_additional_frames = max(
@@ -151,10 +159,11 @@ class IncrementalTranscriber:
         max_tokens = int(len(audio_arr) / SAMPLING_RATE * 8)
         logger.debug(f"Max tokens: {max_tokens}")
 
-        decoded_tokens = mx.array([self.tokenizer.sot_sequence_including_notimestamps], dtype=mx.int32)
+        decoded_tokens = mx.array([list(self.tokenizer.sot_sequence_including_notimestamps) + self.audio_prefix["tokens"]], dtype=mx.int32)
         result_tokens = []
         kv_cache = None
         next_token = None
+        result_logprob = 0
 
         audio_features = self.whisper_mlx_model.encoder(mel)
 
@@ -165,6 +174,7 @@ class IncrementalTranscriber:
                 logits, kv_cache, _ = self.whisper_mlx_model.decoder(next_token.reshape(1, -1), audio_features, kv_cache)
             next_token = mx.argmax(logits[:, -1], axis=-1)
             next_token_value = next_token.item()
+            result_logprob += logits[:, -1, next_token_value] - mx.logsumexp(logits[:, -1], axis=-1)
 
             if i == 0 and next_token_value == self.tokenizer.no_speech:
                 logger.debug("whisper no_speech token generated, skipping transcription")
@@ -174,6 +184,14 @@ class IncrementalTranscriber:
                 break
             result_tokens.append(next_token_value)
             decoded_tokens = mx.concatenate([decoded_tokens, next_token.reshape(1, -1)], axis=-1)
+
+        # Cache a high confidence transcription for future use to improve short audio transcription
+        # TODO: using a min tokens length threshold to avoid a high confidence segment that's too short
+        if len(result_tokens) >= 5 and (self.audio_prefix["result_logprob"] == 0 or self.audio_prefix["result_logprob"] < result_logprob):
+            self.audio_prefix["result_logprob"] = result_logprob
+            self.audio_prefix["tokens"] = result_tokens
+            self.audio_prefix["np_arr"] = audio_arr
+            logger.info(f"New audio prefix: logprob={self.audio_prefix['result_logprob']} tokens={self.audio_prefix['tokens']}")
 
         end_time = time.time()
         whisper_time_ms = int(1000 * (end_time - start_time))
