@@ -39,6 +39,8 @@ INIT_EVENTS = [
 ]
 
 NUM_TOKENS_RESPONSE_PAUSE = 10
+END_OF_USER_PROBABILITY_THRESHOLD = 0.8
+WAIT_USER_CONTINUATION_SECONDS = 3
 
 class VoiceChatAgent:
 
@@ -126,6 +128,7 @@ class VoiceChatAgent:
 
         next_response_token = None
         response_tokens_so_far = []
+        waited_for_continuation = False
 
         while True:
             # Pause to let other tasks process
@@ -137,6 +140,15 @@ class VoiceChatAgent:
                 logger.debug("Heard speaking while generating response - waiting for pause")
                 await asyncio.sleep(0)
                 logger.debug("Resuming response generation after pause for user speaking")
+                continue
+
+            end_user_prob = self.chat_model.prob_end_of_user_message()
+            if not waited_for_continuation and end_user_prob < END_OF_USER_PROBABILITY_THRESHOLD:
+                # If we aren't confident user has finished their message, wait a little before responding
+                # They might say more after they have paused for a few seconds
+                logger.debug(f"Prob end of user message {end_user_prob} below threshold, waiting")
+                waited_for_continuation = True
+                await asyncio.sleep(WAIT_USER_CONTINUATION_SECONDS)
                 continue
 
             logger.debug(f"In state {self.state}, switching to RESPONDING")
