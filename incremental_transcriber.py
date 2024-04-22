@@ -78,7 +78,7 @@ class IncrementalTranscriber:
         }
 
         self.pubsub = pubsub
-        self.pubsub.subscribe(EventType.HEARD_AUDIO, self.handle_heard_audio)
+        self.pubsub.subscribe(EventType.HEARD_AUDIO, self.handle_heard_audio, priority=0)
 
     async def handle_heard_audio(self, audio_bytes):
         logger.debug(f"Handling heard audio {len(audio_bytes)} bytes")
