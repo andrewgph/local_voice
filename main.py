@@ -6,9 +6,9 @@ import time
 from audio_io import AudioIO
 from incremental_transcriber import IncrementalTranscriber
 from speech import SpeechGenerator
-from llm_chat import VoiceChatAgent, VoiceChatAgentConfig
+from llm_chat import VoiceChatAgent
 from whisper_mlx.whisper_mlx import load_model as load_whisper_model
-from mlx_lm.utils import load as load_llm_model
+from chat_model import MistralChatModel
 from events import PubSub, EventType
 
 logger = logging.getLogger(__name__)
@@ -46,7 +46,7 @@ async def main():
     logging.basicConfig(level=getattr(logging, args.log_level), format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     logging.info("Loading Models ...")
-    llm_model, llm_tokenizer = load_llm_model(args.mistral_model_path)
+    chat_model = MistralChatModel(args.mistral_model_path)
     whisper_model = load_whisper_model(args.whisper_mlx_model_dir)
 
     logging.info("Initializing ...")
@@ -55,7 +55,7 @@ async def main():
     audio_io = AudioIO(pubsub, device_name_like=args.device_name)
     transcriber = IncrementalTranscriber(pubsub, whisper_model)
     speech_generator = SpeechGenerator(pubsub, audio_io)
-    agent = VoiceChatAgent(pubsub, llm_model, llm_tokenizer, VoiceChatAgentConfig())
+    agent = VoiceChatAgent(pubsub, chat_model)
     
     logging.info("Starting input audio ...")
     await audio_io.start()
