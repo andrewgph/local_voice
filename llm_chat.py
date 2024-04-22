@@ -38,47 +38,21 @@ INIT_EVENTS = [
     ("What is your name?", "Zoe")
 ]
 
-def tokenize_initial_prompt(llm_tokenizer):
-    tokens = [llm_tokenizer.bos_token_id]
-    tokens += llm_tokenizer.encode("[INST]", add_special_tokens=False)
-    tokens += llm_tokenizer.encode(INIT_PROMPT, add_special_tokens=False)
-    tokens += llm_tokenizer.encode(INIT_EVENTS[0][0], add_special_tokens=False)
-    tokens += llm_tokenizer.encode("[/INST]", add_special_tokens=False)
-    tokens += llm_tokenizer.encode(INIT_EVENTS[0][1], add_special_tokens=False)
-    tokens.append(llm_tokenizer.eos_token_id)
-
-    for heard, response in INIT_EVENTS[1:]:
-        tokens += llm_tokenizer.encode("[INST]", add_special_tokens=False)
-        tokens += llm_tokenizer.encode(heard, add_special_tokens=False)
-        tokens += llm_tokenizer.encode("[/INST]", add_special_tokens=False)
-        tokens += llm_tokenizer.encode(response, add_special_tokens=False)
-        tokens.append(llm_tokenizer.eos_token_id)
-
-    # Start an initial user message segment
-    tokens += llm_tokenizer.encode("[INST]", add_special_tokens=False)
-
-    return tokens
-
-
-@dataclass
-class VoiceChatAgentConfig:
-    num_tokens_response_pause: int = 10
+NUM_TOKENS_RESPONSE_PAUSE = 10
 
 class VoiceChatAgent:
 
-    def __init__(self, pubsub, model, tokenizer, config):
+    def __init__(self, pubsub, chat_model):
         self.pubsub = pubsub
-        self.model = model
-        self.tokenizer = tokenizer
-        self.config = config
+        self.chat_model = chat_model
 
         self.event_queue = Queue()
         self.is_running = False
         self.process_events_task = None
         self.response_task = None
 
+        self.chat_model.initialize(INIT_PROMPT, INIT_EVENTS)
         self.state = AgentState.WAITING
-        self.llm_cache = self._init_llm_cache()
         self.is_heard_speaking = False
         self.pubsub.subscribe(EventType.HEARD_SPEECH, lambda data: self.handle_event(EventType.HEARD_SPEECH, data))
         self.pubsub.subscribe(EventType.HEARD_SPEAKING, lambda data: self.handle_event(EventType.HEARD_SPEAKING, data))
@@ -136,43 +110,16 @@ class VoiceChatAgent:
             except Exception as e:
                 logger.error(f"Error processing event {event[0]}: {str(e)}")
 
-    def _model_call(self, token, llm_cache):
-        # token_str = str(token.item())
-        # with open("tokens_log.txt", "a") as file:
-        #     file.write(token_str + "\n")
-        #     file.flush()
-        return self.model(token.reshape(1, 1), llm_cache)
-
-    def _init_llm_cache(self):
-        tokens = tokenize_initial_prompt(self.tokenizer)
-        _, llm_cache = self.model(mx.array(tokens)[None])
-        mx.eval(llm_cache)
-        logger.debug("Initialized cache for LLM")
-        return llm_cache
-
     def _update_heard_speech(self, transcript):
         logger.debug(f"LLM handling heard speech: {transcript}")
 
         if self.state == AgentState.RESPONDING:
-            logger.debug("Interruption detected, closing response segment")
-            # Close out response attempt
-            _, self.llm_cache = self._model_call(mx.array([self.tokenizer.eos_token_id]), self.llm_cache)
-        
-        if self.state != AgentState.LISTENING:
-            logger.debug("Starting new user message segment")
-            # Start new user message segment
-            for t in mx.array(self.tokenizer.encode("[INST]", add_special_tokens=False)):
-                _, self.llm_cache = self._model_call(t, self.llm_cache)
-            mx.eval(self.llm_cache)
-        
+            logger.debug("Interruption detected")
+
         logger.debug(f"In state {self.state}, switching to LISTENING")
         self.state = AgentState.LISTENING
 
-        logger.debug(f"Updating LLM cache with: {transcript}")
-        for t in mx.array(self.tokenizer.encode(transcript, add_special_tokens=False)):
-            _, self.llm_cache = self._model_call(t, self.llm_cache)
-        mx.eval(self.llm_cache)
-        logger.debug("Updated LLM cache")
+        self.chat_model.add_user_message_segment(transcript)
 
     async def _generate_response(self):
         logger.debug("Generating response")
@@ -192,73 +139,25 @@ class VoiceChatAgent:
                 logger.debug("Resuming response generation after pause for user speaking")
                 continue
 
-            if self.state != AgentState.RESPONDING:
-                logger.debug(f"In state {self.state}, switching to RESPONDING, starting new response segment")
-                response_tokens_so_far = []
-                for t in mx.array(self.tokenizer.encode("[/INST]", add_special_tokens=False)):
-                    logits, self.llm_cache = self._model_call(t, self.llm_cache)
-                next_response_token = mx.argmax(logits.squeeze(1), axis=-1)
-                logger.debug("Added response tokens")
-
             logger.debug(f"In state {self.state}, switching to RESPONDING")
             self.state = AgentState.RESPONDING
 
-            assert next_response_token is not None, "expected next_response_token to be initialized in responding state"
-        
-            say_response_so_far = False
-            is_response_finished = False
-            found_punctuation = False
-            for _ in range(self.config.num_tokens_response_pause):
-                if next_response_token.item() == self.tokenizer.eos_token_id:
-                    is_response_finished = True
-                    logger.debug("Found end of response, breaking response generation")
-                    break
+            response_segment_result = self.chat_model.generate_response_segment(
+                response_tokens_so_far, next_response_token, num_tokens=NUM_TOKENS_RESPONSE_PAUSE)
 
-                response_tokens_so_far.append(next_response_token.item())
-                decoded_next_token = self.tokenizer.decode([next_response_token.item()])
+            next_response_token = response_segment_result.next_response_token
+            response_tokens_so_far = response_segment_result.tokens
 
-                # also check for any punctuation, as that indicates end of a sentence, and we
-                # want to say each sentence asap
-                if any(punct in decoded_next_token for punct in ',.!?'):
-                    found_punctuation = True
-                    logger.debug("Found speech break punctuation, breaking response generation")
-                    break
-
-                logits, self.llm_cache = self._model_call(next_response_token, self.llm_cache)
-                next_response_token = mx.argmax(logits.squeeze(1), axis=-1)
-
-            if is_response_finished:
-                logger.debug("Finished response")
-                say_response_so_far = True
-
-            elif found_punctuation:
-                logger.debug("Found punctuation indicating end of a sentence")
-                say_response_so_far = True
-
-                # Generate a new next token to avoid immediately breaking on next iteration
-                logits, self.llm_cache = self._model_call(next_response_token, self.llm_cache)
-                next_response_token = mx.argmax(logits.squeeze(1), axis=-1)
-                mx.eval(next_response_token)
-
-            else:
-                # else we are just pausing response to check for new audio,
-                # and will keep generating if there are no interuptions
-                logger.debug(f"Pausing to check for interuptions with partial response: {self.tokenizer.decode(response_tokens_so_far)}")
-                mx.eval(next_response_token)
-            
-            if say_response_so_far:
-                response_so_far = self.tokenizer.decode(response_tokens_so_far)
+            if response_segment_result.say_segment:
+                logger.info(f"Speaking response: {response_segment_result.text}")
                 response_tokens_so_far = []
-                logger.info(f"Speaking response: {response_so_far}")
-                await self.pubsub.publish(EventType.RESPONSE_TEXT_GENERATED, response_so_far)
-            
-            if is_response_finished:
-                # Close out response in LLM cache and start new user message segment
-                _, self.llm_cache = self._model_call(mx.array([self.tokenizer.eos_token_id]), self.llm_cache)
-                for t in mx.array(self.tokenizer.encode("[INST]", add_special_tokens=False)):
-                    _, self.llm_cache = self._model_call(t, self.llm_cache)
-                mx.eval(self.llm_cache)
+                await self.pubsub.publish(EventType.RESPONSE_TEXT_GENERATED, response_segment_result.text)
 
+            if response_segment_result.is_complete:
                 logger.debug(f"In state {self.state}, switching to WAITING")
                 self.state = AgentState.WAITING
                 return
+
+            # Pausing response to check for new audio,
+            # and will keep generating if there are no interuptions
+            logger.debug(f"Pausing to check for interuptions with partial response: {response_segment_result.text}")
