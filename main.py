@@ -8,7 +8,7 @@ from incremental_transcriber import IncrementalTranscriber
 from speech import SpeechGenerator
 from llm_chat import VoiceChatAgent
 from whisper_mlx.whisper_mlx import load_model as load_whisper_model
-from chat_model import MistralChatModel
+from chat_model import load_chat_model
 from events import PubSub, EventType
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ class EventTimer:
 def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate audio file.')
     parser.add_argument('--whisper_mlx_model_dir', type=str, help='Path to the whisper mlx model.')
-    parser.add_argument('--mistral_model_path', type=str, help='Path to the mistral mlx model.')
+    parser.add_argument('--mlxlm_model_path', type=str, help='Path to the mlx lm model.')
     parser.add_argument('--device_name', type=str, default=None, help='Name for the input audio device.')
     parser.add_argument('--log_level', type=str, default='INFO', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'], help='Log level')
     args = parser.parse_args()
@@ -46,7 +46,7 @@ async def main():
     logging.basicConfig(level=getattr(logging, args.log_level), format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     logging.info("Loading Models ...")
-    chat_model = MistralChatModel(args.mistral_model_path)
+    chat_model = load_chat_model(args.mlxlm_model_path)
     whisper_model = load_whisper_model(args.whisper_mlx_model_dir)
 
     logging.info("Initializing ...")
