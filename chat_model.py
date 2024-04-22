@@ -42,6 +42,9 @@ class ChatModel:
         
     def add_user_message_segment(self, segment):
         pass
+
+    def prob_end_of_user_message(self):
+        pass
     
     def generate_response_segment(self, num_tokens):
         pass
@@ -54,6 +57,7 @@ class LlamaChatModel(ChatModel):
         self.tokenizer = llama_tokenizer
         self.kv_cache = None
         self.state = ChatModelState.WAITING
+        self.last_logits = None
 
     def initialize(self, system_instructions, initial_messages):
         messages = [
@@ -90,9 +94,13 @@ class LlamaChatModel(ChatModel):
 
         logger.debug(f"Updating LLM cache with: {text}")
         for t in mx.array(self.tokenizer.encode(text, add_special_tokens=False)):
-            _, self.kv_cache = self._model_call(t, self.kv_cache)
+            self.last_logits, self.kv_cache = self._model_call(t, self.kv_cache)
         mx.eval(self.kv_cache)
         logger.debug("Updated LLM cache")
+
+    def prob_end_of_user_message(self):
+        probs = self.last_logits[0, -1, self.tokenizer.eos_token_id] - mx.logsumexp(self.last_logits[0, -1], axis=-1)
+        return mx.exp(probs).item()
 
     def generate_response_segment(self, response_tokens_so_far, next_response_token, num_tokens):
         is_response_finished = False
@@ -218,6 +226,10 @@ class MistralChatModel(ChatModel):
             _, self.kv_cache = self._model_call(t, self.kv_cache)
         mx.eval(self.kv_cache)
         logger.debug("Updated LLM cache")
+    
+    def prob_end_of_user_message(self):
+        # TODO: Implement
+        return 1.0
 
     def generate_response_segment(self, response_tokens_so_far, next_response_token, num_tokens):
         is_response_finished = False
