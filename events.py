@@ -17,7 +17,7 @@ class PubSub:
     async def publish(self, event_type, data):
         if event_type in self.subscribers:
             for _, callback in self.subscribers[event_type]:
-                asyncio.create_task(callback(data))
+                await callback(data)
 
     def subscribe(self, event_type, callback, priority=5):
         if event_type not in self.subscribers:
