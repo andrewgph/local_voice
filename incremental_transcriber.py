@@ -187,7 +187,9 @@ class IncrementalTranscriber:
 
         # Cache a high confidence transcription for future use to improve short audio transcription
         # TODO: using a min tokens length threshold to avoid a high confidence segment that's too short
-        if len(result_tokens) >= 5 and (self.audio_prefix["result_logprob"] == 0 or self.audio_prefix["result_logprob"] < result_logprob):
+        result_prob = mx.exp(result_logprob).item()
+        result_logprob = result_logprob.item()
+        if result_prob > 0.5 and len(result_tokens) >= 5 and (self.audio_prefix["result_logprob"] == 0 or self.audio_prefix["result_logprob"] < result_logprob):
             self.audio_prefix["result_logprob"] = result_logprob
             self.audio_prefix["tokens"] = result_tokens
             self.audio_prefix["np_arr"] = audio_arr
