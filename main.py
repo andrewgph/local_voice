@@ -5,7 +5,7 @@ import time
 
 from audio_io import AudioIO
 from incremental_transcriber import IncrementalTranscriber
-from speech import SpeechGenerator
+from speech_melo import SpeechGenerator
 from llm_chat import VoiceChatAgent
 from whisper_mlx.whisper_mlx import load_model as load_whisper_model
 from chat_model import load_chat_model
