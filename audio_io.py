@@ -22,20 +22,25 @@ def input_audio_stream_process(audio_queue, device_name_like=None):
         audio_queue.put((time.time(), time_info, in_data))
         return (None, pyaudio.paContinue)
 
-    print('Starting input stream')
+    def start_stream():
+        print('Starting input stream')
+        return p.open(
+            format=pyaudio.paInt16,
+            channels=CHANNELS,
+            rate=SAMPLE_RATE,
+            input=True,
+            frames_per_buffer=CHUNK_SIZE,
+            input_device_index=device_idx,
+            stream_callback=callback)
 
-    stream = p.open(
-        format=pyaudio.paInt16,
-        channels=CHANNELS,
-        rate=SAMPLE_RATE,
-        input=True,
-        frames_per_buffer=CHUNK_SIZE,
-        input_device_index=device_idx,
-        stream_callback=callback)
+    stream = start_stream()
 
-    while stream.is_active():
+    while True:
+        if not stream.is_active():
+            print('Stream failed, restarting...')
+            stream.close()
+            stream = start_stream()
         time.sleep(0.1)
-
     print('Stopping input stream')
 
     stream.close()
