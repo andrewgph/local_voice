@@ -20,8 +20,12 @@ SAMPLING_RATE = 16000
 
 # Window size is 160 = 10 ms at 16kHz * 2 bytes per sample
 AUDIO_BYTES_WINDOW_SIZE = 160 * 2
-# Check last 50ms for VAD to identify pauses
-AUDIO_BYTES_VAD_CHECK_SIZE = AUDIO_BYTES_WINDOW_SIZE * 5
+# Check last 100ms for VAD to identify pauses
+AUDIO_BYTES_VAD_CHECK_SIZE = AUDIO_BYTES_WINDOW_SIZE * 10
+# Min audio bytes window to transcribe
+# Assume anything less than this doesn't contain speech
+# Set to around 500ms
+AUDIO_BYTES_MIN_TRANSCRIBE_SIZE = AUDIO_BYTES_WINDOW_SIZE * 50
 
 # Model can take up to 3000 mel frames (30s)
 MAX_MEL_FRAMES = 3000
@@ -62,9 +66,10 @@ class IncrementalTranscriber:
             task="transcribe",
         )
 
+        self.audio_bytes_vad_buffer = b''
         self.audio_bytes_buffer = b''
         self.vad = Vad()
-        self.vad.set_mode(3)
+        self.vad.set_mode(2)
 
         self.event_queue = Queue()
         self.is_running = False
@@ -100,23 +105,48 @@ class IncrementalTranscriber:
                 logger.debug("No audio to transcribe")
                 continue
 
-            self.audio_bytes_buffer += audio_bytes
-            audio_bytes_vad_check = self.audio_bytes_buffer[-max(len(audio_bytes), AUDIO_BYTES_VAD_CHECK_SIZE):]
-            logger.debug(f"Audio bytes VAD check: {len(audio_bytes_vad_check)} bytes")
+            # Fill up the VAD check buffer
+            self.audio_bytes_vad_buffer += audio_bytes
+            if len(self.audio_bytes_vad_buffer) < AUDIO_BYTES_VAD_CHECK_SIZE:
+                logger.debug("Waiting for VAD check buffer to fill up")
+                continue
 
-            if not self._vad_check(audio_bytes_vad_check):
-                logger.debug("No recent speech detected")
+            logger.debug(f"Audio bytes VAD check buffer: {len(self.audio_bytes_vad_buffer)} bytes")
 
-                first_idx, last_idx = self._speech_idxs(self.audio_bytes_buffer)
-                if first_idx is None or last_idx is None:
-                    logger.debug("No speech in audio bytes buffer to transcribe")
-                    await self.pubsub.publish(EventType.HEARD_PAUSE, None)
+            # Check through the VAD check buffer in small windows
+            # Only keep windows which contain speech
+            contains_speech = False
+            for i in range(0, len(self.audio_bytes_vad_buffer), AUDIO_BYTES_VAD_CHECK_SIZE):
+                vad_check_bytes = self.audio_bytes_vad_buffer[i:i+AUDIO_BYTES_VAD_CHECK_SIZE]
+                logger.debug(f"VAD checking window of size {len(vad_check_bytes)}")
+                current_contains_speech = self._vad_check(vad_check_bytes)
+                if current_contains_speech:
+                    logger.debug("VAD check found speech - adding to buffer")
+                    self.audio_bytes_buffer += vad_check_bytes
+                if len(vad_check_bytes) < AUDIO_BYTES_VAD_CHECK_SIZE:
+                    # In this case include the last window for contains speech
+                    contains_speech = contains_speech or current_contains_speech
+                else:
+                    contains_speech = current_contains_speech
+
+            # Reset VAD check buffer
+            self.audio_bytes_vad_buffer = b''
+
+            logger.debug(f"Audio bytes buffer with speech: {len(self.audio_bytes_buffer)} bytes")
+
+            # If last window doesn't contain speech, try to transcribe
+            if not contains_speech:
+                logger.debug("No recent speech detected by VAD")
+
+                if len(self.audio_bytes_buffer) == 0:
+                    logger.debug("No audio bytes with speech to transcribe")
+                    continue
+                if len(self.audio_bytes_buffer) < AUDIO_BYTES_MIN_TRANSCRIBE_SIZE:
+                    logger.debug(f"Audio bytes buffer too small to transcribe: {len(self.audio_bytes_buffer)} bytes")
                     continue
 
-                # TODO: just trim the front for now, more useful to remove silence from beginning
-                trimmed_audio_bytes = self.audio_bytes_buffer[first_idx:]
-                audio_arr = audio_bytes_to_np_array(trimmed_audio_bytes)
-                logger.debug(f"Trimmed audio arr shape: {audio_arr.shape}")
+                audio_arr = audio_bytes_to_np_array(self.audio_bytes_buffer)
+                logger.debug(f"audio arr shape: {audio_arr.shape}")
                 self.audio_bytes_buffer = b''
 
                 text = self._transcribe_arr(audio_arr)
@@ -127,7 +157,7 @@ class IncrementalTranscriber:
                 await self.pubsub.publish(EventType.HEARD_PAUSE, None)
             else:
                 # TODO: VAD check might be too sensitive and cause accidental interuptions
-                logger.debug("VAD check found speech")
+                logger.debug("VAD check found recent speech")
                 await self.pubsub.publish(EventType.HEARD_SPEAKING, None)
 
     def _transcribe_arr(self, audio_arr):
@@ -156,7 +186,7 @@ class IncrementalTranscriber:
             mel.shape[1] // 2, self.whisper_mlx_model.dims.n_audio_state).astype(mx.float16)
 
         # TODO: crude heuristic of 8 tokens per second in original audio array as an upper bound
-        max_tokens = int(len(audio_arr) / SAMPLING_RATE * 8)
+        max_tokens = max(int(len(audio_arr) / SAMPLING_RATE * 8), 1)
         logger.debug(f"Max tokens: {max_tokens}")
 
         decoded_tokens = mx.array([list(self.tokenizer.sot_sequence_including_notimestamps) + self.audio_prefix["tokens"]], dtype=mx.int32)
@@ -202,28 +232,6 @@ class IncrementalTranscriber:
         logger.info(f"whisper: {whisper_time_ms}ms : {text}")
 
         return text
-    
-    def _speech_idxs(self, audio_bytes):
-        first_idx, last_idx = None, None
-        
-        for i in range(0, len(audio_bytes), AUDIO_BYTES_WINDOW_SIZE):
-            if self.vad.is_speech(audio_bytes[i:i+AUDIO_BYTES_WINDOW_SIZE], SAMPLING_RATE):
-                first_idx = i
-                break
-        
-        for i in range(len(audio_bytes) - AUDIO_BYTES_WINDOW_SIZE, 0, -AUDIO_BYTES_WINDOW_SIZE):
-            if self.vad.is_speech(audio_bytes[i:i+AUDIO_BYTES_WINDOW_SIZE], SAMPLING_RATE):
-                last_idx = i + AUDIO_BYTES_WINDOW_SIZE
-                break
-        
-        if first_idx is None or last_idx is None:
-            return None, None
-
-        # Add extra buffer to first and last index, to account for inaccuracy in VAD check
-        first_idx = max(0, first_idx - AUDIO_BYTES_WINDOW_SIZE * 5)
-        last_idx = min(len(audio_bytes), last_idx + AUDIO_BYTES_WINDOW_SIZE * 5)
-
-        return first_idx, last_idx
 
     def _vad_check(self, audio_bytes):
         window_count = 0
