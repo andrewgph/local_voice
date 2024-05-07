@@ -23,7 +23,7 @@ class SpeechGenerator:
         
         self.pubsub = pubsub
         # Higher priority for heard speech so speech is interupted asap
-        self.pubsub.subscribe(EventType.HEARD_SPEECH, self.handle_heard_speech, priority=0)
+        self.pubsub.subscribe(EventType.HEARD_SPEECH, self.handle_heard_speech, priority=1)
         self.pubsub.subscribe(EventType.RESPONSE_TEXT_GENERATED, self.handle_response_text_generated)
         self.is_generating_speech = False
         self.discard_generated_speech = False
