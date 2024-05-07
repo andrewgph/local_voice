@@ -1,11 +1,8 @@
 import numpy as np
-import torch
-import pyaudio
-import multiprocessing
 import time
 import librosa
 
-from melo.api import TTS
+from min_rhasspy_piper.voice import PiperVoice
 
 from events import EventType
 
@@ -16,8 +13,9 @@ logger = logging.getLogger(__name__)
 class SpeechGenerator:
 
     def __init__(self, pubsub, audio_io):
-        self.model = TTS(language='EN', device='cpu')
-        self.speaker_ids = self.model.hps.data.spk2id
+        self.voice = PiperVoice.load(
+            model_path="/Users/andrew/Downloads/en_US-amy-medium.onnx",
+            config_path="/Users/andrew/Downloads/en_en_US_amy_medium_en_US-amy-medium.onnx.json")
         
         self.pubsub = pubsub
         # Higher priority for heard speech so speech is interupted asap
@@ -53,17 +51,18 @@ class SpeechGenerator:
         logger.info(f"Speech generation took {int((time.time() - start_time) * 1000)} milliseconds")    
         return speech_arr
 
-    def _predict(self, text, speaker="SLT"):
+    def _predict(self, text):
         if len(text.strip()) == 0:
             return None
         
-        speech_arr = self.model.tts_to_file(
-            text,
-            self.speaker_ids['EN-Default'],
-            speed=1.0)
+        results = []
+        for result in self.voice.synthesize_stream_raw(text):
+            results.append(result)
+        speech_arr = np.concatenate(results)
+
         logger.debug(f"Original speech array shape: {speech_arr.shape}")
         
-        original_sr = 44100
+        original_sr = self.voice.config.sample_rate
         target_sr = 16000
         speech_arr = librosa.resample(speech_arr, orig_sr=original_sr, target_sr=target_sr)
         logger.debug(f"Resampled speech array from {original_sr} to {target_sr} shape: {speech_arr.shape}")
