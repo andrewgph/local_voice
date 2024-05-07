@@ -5,7 +5,7 @@ import time
 
 from audio_io import AudioIO
 from incremental_transcriber import IncrementalTranscriber
-from speech_melo import SpeechGenerator
+from speech_piper import SpeechGenerator
 from llm_chat import VoiceChatAgent
 from whisper_mlx.whisper_mlx import load_model as load_whisper_model
 from chat_model import load_chat_model
@@ -18,10 +18,10 @@ class EventTimer:
     def __init__(self, pubsub):
         self.pubsub = pubsub
         self.last_heard_speech_time_ms = None
-        self.pubsub.subscribe(EventType.HEARD_SPEECH, self.handle_heard_speech)
-        self.pubsub.subscribe(EventType.RESPONSE_SPEECH_GENERATED, self.handle_response_speech_generated)
+        self.pubsub.subscribe(EventType.HEARD_SPEAKING, self.handle_heard_speaking, priority=0)
+        self.pubsub.subscribe(EventType.RESPONSE_SPEECH_GENERATED, self.handle_response_speech_generated, priority=0)
     
-    async def handle_heard_speech(self, event_data):
+    async def handle_heard_speaking(self, event_data):
         self.last_heard_speech_time_ms = int(time.time() * 1000)
 
     async def handle_response_speech_generated(self, event_data):
