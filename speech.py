@@ -1,12 +1,11 @@
 import numpy as np
-import torch
-import pyaudio
-import multiprocessing
 import time
+import librosa
+
+from audio_io import SAMPLE_RATE
+from min_rhasspy_piper.voice import PiperVoice
 
 from events import EventType
-
-from transformers import SpeechT5Processor, SpeechT5ForTextToSpeech, SpeechT5HifiGan
 
 import logging
 
@@ -15,11 +14,9 @@ logger = logging.getLogger(__name__)
 class SpeechGenerator:
 
     def __init__(self, pubsub, audio_io):
-        checkpoint = "microsoft/speecht5_tts"
-        self.processor = SpeechT5Processor.from_pretrained(checkpoint)
-        self.model = SpeechT5ForTextToSpeech.from_pretrained(checkpoint)
-        self.vocoder = SpeechT5HifiGan.from_pretrained("microsoft/speecht5_hifigan")
-        self.speaker_embedding = torch.tensor(np.load("/Users/andrew/Downloads/cmu_us_slt_arctic-wav-arctic_a0508.npy")).unsqueeze(0)
+        self.voice = PiperVoice.load(
+            model_path="/Users/andrew/Downloads/en_US-amy-medium.onnx",
+            config_path="/Users/andrew/Downloads/en_en_US_amy_medium_en_US-amy-medium.onnx.json")
         
         self.pubsub = pubsub
         # Higher priority for heard speech so speech is interupted asap
@@ -55,23 +52,24 @@ class SpeechGenerator:
         logger.info(f"Speech generation took {int((time.time() - start_time) * 1000)} milliseconds")    
         return speech_arr
 
-    def _predict(self, text, speaker="SLT"):
+    def _predict(self, text):
         if len(text.strip()) == 0:
             return None
+        
+        results = []
+        for result in self.voice.synthesize_stream_raw(text):
+            results.append(result)
+        speech_arr = np.concatenate(results)
 
-        start_process_time = time.time()
-        inputs = self.processor(text=text, return_tensors="pt")
-        logger.debug(f"Processing time: {int((time.time() - start_process_time) * 1000)} milliseconds")
+        logger.debug(f"Original speech array shape: {speech_arr.shape}")
+        
+        # Make the sample rate used in audio_io
+        original_sr = self.voice.config.sample_rate
+        target_sr = SAMPLE_RATE
+        speech_arr = librosa.resample(speech_arr, orig_sr=original_sr, target_sr=target_sr)
+        logger.debug(f"Resampled speech array from {original_sr} to {target_sr} shape: {speech_arr.shape}")
 
-        # limit input length
-        input_ids = inputs["input_ids"]
-        input_ids = input_ids[..., :self.model.config.max_text_positions]
-
-        generate_speech_start_time = time.time()
-        speech = self.model.generate_speech(input_ids, self.speaker_embedding, vocoder=self.vocoder)
-        logger.debug(f"Generate speech time: {int((time.time() - generate_speech_start_time) * 1000)} milliseconds")
-
-        return speech.numpy()
+        return speech_arr
 
     def play_speech(self, speech_arr):
         logger.debug("Putting speech into audio queue")

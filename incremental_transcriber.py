@@ -5,6 +5,7 @@ import time
 import mlx.core as mx
 from webrtcvad import Vad
 import noisereduce as nr
+import os
 
 from events import EventType
 
@@ -41,23 +42,11 @@ def audio_bytes_to_np_array(bytes_data):
     arr = arr.astype('float32') / 32768.0
     return arr
 
-def record_result(audio_arr, text):
-    timestamp_ms = int(time.time() * 1000)
-    
-    # Save audio as wav file
-    audio_filename = f"transcribe_log/audio_{timestamp_ms}.wav"
-    from scipy.io import wavfile
-    wavfile.write(audio_filename, SAMPLING_RATE, audio_arr)
-    
-    # Save text result to txt file  
-    text_filename = f"transcribe_log/text_{timestamp_ms}.txt"
-    with open(text_filename, "w") as f:
-        f.write(text)
-
 
 class IncrementalTranscriber:
 
-    def __init__(self, pubsub, whisper_mlx_model):
+    def __init__(self, pubsub, whisper_mlx_model, log_dir):
+        self.log_dir = log_dir
         self.whisper_mlx_model = whisper_mlx_model
         self.tokenizer = get_tokenizer(
             multilingual=whisper_mlx_model.is_multilingual,
@@ -152,7 +141,7 @@ class IncrementalTranscriber:
                 text = self._transcribe_arr(audio_arr)
                 if text.strip():
                     await self.pubsub.publish(EventType.HEARD_SPEECH, text.strip())
-                    record_result(audio_arr, text)
+                    self._record_result(audio_arr, text)
                 
                 await self.pubsub.publish(EventType.HEARD_PAUSE, None)
             else:
@@ -242,4 +231,19 @@ class IncrementalTranscriber:
                 speech_count += 1
         logger.debug(f"VAD found speech in {speech_count} / {window_count} windows")
         return speech_count > 0
+    
+    def _record_result(self, audio_arr, text):
+        timestamp_ms = int(time.time() * 1000)
+        
+        # Save audio as wav file
+        os.makedirs(f"{self.log_dir}/wav_files", exist_ok=True)
+        audio_filename = f"{self.log_dir}/wav_files/audio_{timestamp_ms}.wav"
+        from scipy.io import wavfile
+        wavfile.write(audio_filename, SAMPLING_RATE, audio_arr)
+        
+        # Save text result to txt file  
+        os.makedirs(f"{self.log_dir}/transcript_files", exist_ok=True)
+        text_filename = f"{self.log_dir}/transcript_files/transcript_{timestamp_ms}.txt"
+        with open(text_filename, "w") as f:
+            f.write(text)
 
