@@ -12,21 +12,17 @@ from events import EventType
 import whisper_mlx.audio as audio
 from whisper_mlx.whisper_mlx import sinusoids
 from whisper_mlx.tokenizer import get_tokenizer
+from audio_io import SAMPLE_RATE
 
 import logging
 
 logger = logging.getLogger(__name__)
 
-SAMPLING_RATE = 16000
 
-# Window size is 160 = 10 ms at 16kHz * 2 bytes per sample
-AUDIO_BYTES_WINDOW_SIZE = 160 * 2
-# Check last 100ms for VAD to identify pauses
-AUDIO_BYTES_VAD_CHECK_SIZE = AUDIO_BYTES_WINDOW_SIZE * 10
 # Min audio bytes window to transcribe
 # Assume anything less than this doesn't contain speech
-# Set to around 500ms
-AUDIO_BYTES_MIN_TRANSCRIBE_SIZE = AUDIO_BYTES_WINDOW_SIZE * 50
+# Set to 500ms: 16 samples every 1ms * 2 bytes per sample * 500ms
+AUDIO_BYTES_MIN_TRANSCRIBE_SIZE = 16 * 2 * 500
 
 # Model can take up to 3000 mel frames (30s)
 MAX_MEL_FRAMES = 3000
@@ -55,10 +51,7 @@ class IncrementalTranscriber:
             task="transcribe",
         )
 
-        self.audio_bytes_vad_buffer = b''
         self.audio_bytes_buffer = b''
-        self.vad = Vad()
-        self.vad.set_mode(2)
 
         self.event_queue = Queue()
         self.is_running = False
@@ -72,15 +65,27 @@ class IncrementalTranscriber:
         }
 
         self.pubsub = pubsub
-        self.pubsub.subscribe(EventType.HEARD_AUDIO, self.handle_heard_audio, priority=0)
+        self.pubsub.subscribe(EventType.HEARD_SPEAKING, self.handle_heard_speaking, priority=5)
+        self.pubsub.subscribe(EventType.HEARD_NO_SPEAKING, self.handle_heard_no_speaking, priority=5)
 
-    async def handle_heard_audio(self, audio_bytes):
-        logger.debug(f"Handling heard audio {len(audio_bytes)} bytes")
+    def _start_transcriber(self):
+        logger.debug("Starting transcriber")
+        self.is_running = True
+        self.transcribe_task = asyncio.create_task(self.transcribe())
+
+    async def handle_heard_speaking(self, audio_bytes):
+        logger.debug(f"Handling heard speaking {len(audio_bytes)} bytes")
         await self.event_queue.put(audio_bytes)
         if not self.is_running:
-            logger.debug("Starting transcriber")
-            self.is_running = True
-            self.transcribe_task = asyncio.create_task(self.transcribe())
+            self._start_transcriber()
+        else:
+            logger.debug("Transcriber already running")
+    
+    async def handle_heard_no_speaking(self, data):
+        logger.debug("Handling heard no speaking")
+        await self.event_queue.put(None)
+        if not self.is_running:
+            self._start_transcriber()
         else:
             logger.debug("Transcriber already running")
 
@@ -88,71 +93,34 @@ class IncrementalTranscriber:
         while self.is_running:
             audio_bytes = await self.event_queue.get()
 
-            logger.debug(f"Transcribing {len(audio_bytes)} bytes")
-
-            if len(audio_bytes) == 0:
-                logger.debug("No audio to transcribe")
+            if audio_bytes is not None:
+                logger.debug(f"Adding {len(audio_bytes)} bytes to buffer")
+                self.audio_bytes_buffer += audio_bytes
                 continue
 
-            # Fill up the VAD check buffer
-            self.audio_bytes_vad_buffer += audio_bytes
-            if len(self.audio_bytes_vad_buffer) < AUDIO_BYTES_VAD_CHECK_SIZE:
-                logger.debug("Waiting for VAD check buffer to fill up")
+            # Heard no speaking, checking if there is audio to transcribe
+            logger.debug(f"Transcribing audio bytes buffer with speech: {len(self.audio_bytes_buffer)} bytes")
+
+            if len(self.audio_bytes_buffer) == 0:
+                logger.debug("No audio bytes with speech to transcribe")
+                continue
+            if len(self.audio_bytes_buffer) < AUDIO_BYTES_MIN_TRANSCRIBE_SIZE:
+                logger.debug(f"Audio bytes buffer too small to transcribe: {len(self.audio_bytes_buffer)} bytes")
                 continue
 
-            logger.debug(f"Audio bytes VAD check buffer: {len(self.audio_bytes_vad_buffer)} bytes")
+            audio_arr = audio_bytes_to_np_array(self.audio_bytes_buffer)
+            logger.debug(f"audio arr shape: {audio_arr.shape}")
+            self.audio_bytes_buffer = b''
 
-            # Check through the VAD check buffer in small windows
-            # Only keep windows which contain speech
-            contains_speech = False
-            for i in range(0, len(self.audio_bytes_vad_buffer), AUDIO_BYTES_VAD_CHECK_SIZE):
-                vad_check_bytes = self.audio_bytes_vad_buffer[i:i+AUDIO_BYTES_VAD_CHECK_SIZE]
-                logger.debug(f"VAD checking window of size {len(vad_check_bytes)}")
-                current_contains_speech = self._vad_check(vad_check_bytes)
-                if current_contains_speech:
-                    logger.debug("VAD check found speech - adding to buffer")
-                    self.audio_bytes_buffer += vad_check_bytes
-                if len(vad_check_bytes) < AUDIO_BYTES_VAD_CHECK_SIZE:
-                    # In this case include the last window for contains speech
-                    contains_speech = contains_speech or current_contains_speech
-                else:
-                    contains_speech = current_contains_speech
-
-            # Reset VAD check buffer
-            self.audio_bytes_vad_buffer = b''
-
-            logger.debug(f"Audio bytes buffer with speech: {len(self.audio_bytes_buffer)} bytes")
-
-            # If last window doesn't contain speech, try to transcribe
-            if not contains_speech:
-                logger.debug("No recent speech detected by VAD")
-
-                if len(self.audio_bytes_buffer) == 0:
-                    logger.debug("No audio bytes with speech to transcribe")
-                    continue
-                if len(self.audio_bytes_buffer) < AUDIO_BYTES_MIN_TRANSCRIBE_SIZE:
-                    logger.debug(f"Audio bytes buffer too small to transcribe: {len(self.audio_bytes_buffer)} bytes")
-                    continue
-
-                audio_arr = audio_bytes_to_np_array(self.audio_bytes_buffer)
-                logger.debug(f"audio arr shape: {audio_arr.shape}")
-                self.audio_bytes_buffer = b''
-
-                text = self._transcribe_arr(audio_arr)
-                if text.strip():
-                    await self.pubsub.publish(EventType.HEARD_SPEECH, text.strip())
-                    self._record_result(audio_arr, text)
-                
-                await self.pubsub.publish(EventType.HEARD_PAUSE, None)
-            else:
-                # TODO: VAD check might be too sensitive and cause accidental interuptions
-                logger.debug("VAD check found recent speech")
-                await self.pubsub.publish(EventType.HEARD_SPEAKING, None)
+            text = self._transcribe_arr(audio_arr)
+            if text.strip():
+                await self.pubsub.publish(EventType.HEARD_SPEECH, text.strip())
+                self._record_result(audio_arr, text)
 
     def _transcribe_arr(self, audio_arr):
         start_time = time.time()
 
-        audio_arr = nr.reduce_noise(y=audio_arr, sr=SAMPLING_RATE)
+        audio_arr = nr.reduce_noise(y=audio_arr, sr=SAMPLE_RATE)
         prefixed_audio_arr = np.concatenate([self.audio_prefix["np_arr"], audio_arr])
         mel = audio.log_mel_spectrogram(prefixed_audio_arr, self.whisper_mlx_model.dims.n_mels)
         mel = mel.reshape(1, *mel.shape)
@@ -175,7 +143,7 @@ class IncrementalTranscriber:
             mel.shape[1] // 2, self.whisper_mlx_model.dims.n_audio_state).astype(mx.float16)
 
         # TODO: crude heuristic of 8 tokens per second in original audio array as an upper bound
-        max_tokens = max(int(len(audio_arr) / SAMPLING_RATE * 8), 1)
+        max_tokens = max(int(len(audio_arr) / SAMPLE_RATE * 8), 1)
         logger.debug(f"Max tokens: {max_tokens}")
 
         decoded_tokens = mx.array([list(self.tokenizer.sot_sequence_including_notimestamps) + self.audio_prefix["tokens"]], dtype=mx.int32)
@@ -222,16 +190,6 @@ class IncrementalTranscriber:
 
         return text
 
-    def _vad_check(self, audio_bytes):
-        window_count = 0
-        speech_count = 0
-        for i in range(0, len(audio_bytes), AUDIO_BYTES_WINDOW_SIZE):
-            window_count += 1
-            if self.vad.is_speech(audio_bytes[i:i+AUDIO_BYTES_WINDOW_SIZE], SAMPLING_RATE):
-                speech_count += 1
-        logger.debug(f"VAD found speech in {speech_count} / {window_count} windows")
-        return speech_count > 0
-    
     def _record_result(self, audio_arr, text):
         timestamp_ms = int(time.time() * 1000)
         
@@ -239,11 +197,10 @@ class IncrementalTranscriber:
         os.makedirs(f"{self.log_dir}/wav_files", exist_ok=True)
         audio_filename = f"{self.log_dir}/wav_files/audio_{timestamp_ms}.wav"
         from scipy.io import wavfile
-        wavfile.write(audio_filename, SAMPLING_RATE, audio_arr)
+        wavfile.write(audio_filename, SAMPLE_RATE, audio_arr)
         
         # Save text result to txt file  
         os.makedirs(f"{self.log_dir}/transcript_files", exist_ok=True)
         text_filename = f"{self.log_dir}/transcript_files/transcript_{timestamp_ms}.txt"
         with open(text_filename, "w") as f:
             f.write(text)
-

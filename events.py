@@ -7,6 +7,7 @@ class EventType(Enum):
     HEARD_SPEECH = auto()
     HEARD_SPEAKING = auto()
     HEARD_PAUSE = auto()
+    HEARD_NO_SPEAKING = auto()
     RESPONSE_TEXT_GENERATED = auto()
     RESPONSE_SPEECH_GENERATED = auto()
 

@@ -54,8 +54,8 @@ class VoiceChatAgent:
         self.state = AgentState.WAITING
         self.is_heard_speaking = False
         self.pubsub.subscribe(EventType.HEARD_SPEECH, lambda data: self.handle_event(EventType.HEARD_SPEECH, data))
-        self.pubsub.subscribe(EventType.HEARD_SPEAKING, lambda data: self.handle_event(EventType.HEARD_SPEAKING, data))
-        self.pubsub.subscribe(EventType.HEARD_PAUSE, lambda data: self.handle_event(EventType.HEARD_PAUSE, data))
+        self.pubsub.subscribe(EventType.HEARD_SPEAKING, lambda data: self.handle_event(EventType.HEARD_SPEAKING, None))
+        self.pubsub.subscribe(EventType.HEARD_NO_SPEAKING, lambda data: self.handle_event(EventType.HEARD_NO_SPEAKING, None))
 
     async def handle_event(self, event_type, data):
         logger.debug(f"Handling event {event_type} with data: {data}")
@@ -95,7 +95,7 @@ class VoiceChatAgent:
                 elif event[0] == EventType.HEARD_SPEAKING:
                     self.is_heard_speaking = True
                 
-                elif event[0] == EventType.HEARD_PAUSE:
+                elif event[0] == EventType.HEARD_NO_SPEAKING:
                     if self.state == AgentState.WAITING:
                         logger.debug("Paused while waiting for user input, ignoring")
                         continue

@@ -10,6 +10,7 @@ from llm_chat import VoiceChatAgent
 from whisper_mlx.whisper_mlx import load_model as load_whisper_model
 from chat_model import load_chat_model
 from events import PubSub, EventType
+from vad_checker import VADChecker
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ async def main():
     pubsub = PubSub()
     event_timer = EventTimer(pubsub)
     audio_io = AudioIO(pubsub, device_name_like=args.device_name)
+    vad_checker = VADChecker(pubsub)
     transcriber = IncrementalTranscriber(pubsub, whisper_model, args.log_dir)
     speech_generator = SpeechGenerator(pubsub, audio_io)
     agent = VoiceChatAgent(pubsub, chat_model)
