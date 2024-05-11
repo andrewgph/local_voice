@@ -7,8 +7,6 @@ from enum import Enum, auto
 
 from events import EventType
 
-from dataclasses import dataclass
-
 import logging
 
 logger = logging.getLogger(__name__)
