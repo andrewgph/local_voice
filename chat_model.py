@@ -77,6 +77,8 @@ class LlamaChatModel(ChatModel):
             add_generation_prompt=True
         )
 
+        self._log_tokens(input_ids)
+
         _, self.kv_cache = self.model(mx.array(input_ids)[None])
         mx.eval(self.kv_cache)
     
@@ -172,7 +174,11 @@ class LlamaChatModel(ChatModel):
         )
 
     def _model_call(self, token, llm_cache):
-        with open(self.token_log_file, "a") as file:
-            file.write(str(token.item()) + "\n")
-            file.flush()
+        self._log_tokens([token.item()])
         return self.model(token.reshape(1, 1), llm_cache)
+
+    def _log_tokens(self, tokens):
+        with open(self.token_log_file, "a") as file:
+            for token in tokens:
+                file.write(str(token) + "\n")
+                file.flush()
