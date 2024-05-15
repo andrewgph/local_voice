@@ -55,6 +55,7 @@ class IncrementalTranscriber:
 
         self.event_queue = Queue()
         self.is_running = False
+        self.event_loop_task = None
         self.transcribe_task = None
 
         # Cached audio prefix to improve short audio transcription
@@ -71,7 +72,7 @@ class IncrementalTranscriber:
     def _start_transcriber(self):
         logger.debug("Starting transcriber")
         self.is_running = True
-        self.transcribe_task = asyncio.create_task(self.transcribe())
+        self.event_loop_task = asyncio.create_task(self.event_loop())
 
     async def handle_heard_speaking(self, audio_bytes):
         logger.debug(f"Handling heard speaking {len(audio_bytes)} bytes")
@@ -89,13 +90,18 @@ class IncrementalTranscriber:
         else:
             logger.debug("Transcriber already running")
 
-    async def transcribe(self):
+    async def event_loop(self):
         while self.is_running:
             audio_bytes = await self.event_queue.get()
 
             if audio_bytes is not None:
-                logger.debug(f"Adding {len(audio_bytes)} bytes to buffer")
+                # Cancel any existing transcribe task if we have new speech audio before it completes
+                if self.transcribe_task is not None:
+                    logger.debug("Cancelling existing transcribe task")
+                    self.transcribe_task.cancel()
+
                 self.audio_bytes_buffer += audio_bytes
+                logger.debug(f"Adding {len(audio_bytes)} bytes to buffer, new buffer size {len(self.audio_bytes_buffer)} bytes")
                 continue
 
             # Heard no speaking, checking if there is audio to transcribe
@@ -108,17 +114,26 @@ class IncrementalTranscriber:
                 logger.debug(f"Audio bytes buffer too small to transcribe: {len(self.audio_bytes_buffer)} bytes")
                 continue
 
-            audio_arr = audio_bytes_to_np_array(self.audio_bytes_buffer)
-            logger.debug(f"audio arr shape: {audio_arr.shape}")
-            self.audio_bytes_buffer = b''
+            # Start a new transcription task only if it's not already running
+            if self.transcribe_task is None:
+                self.transcribe_task = asyncio.create_task(self._transcribe())
 
-            text = self._transcribe_arr(audio_arr)
-            if text.strip():
-                await self.pubsub.publish(EventType.HEARD_SPEECH, text.strip())
-                self._record_result(audio_arr, text)
+    async def _transcribe(self):
+        # TODO: Move transcription to a separate thread so the MLX operations don't block other asyncio tasks
+        # This doesn't currently work as VAD is too sensitive, causes continual interruptions to transcription task
+        #text = await asyncio.to_thread(self._transcribe_arr)
+        text = self._transcribe_arr()
 
-    def _transcribe_arr(self, audio_arr):
+        if text.strip():
+            await self.pubsub.publish(EventType.HEARD_SPEECH, text.strip())
+            self._record_result(audio_bytes_to_np_array(self.audio_bytes_buffer), text)
+        self.audio_bytes_buffer = b''
+
+    def _transcribe_arr(self):
         start_time = time.time()
+
+        audio_arr = audio_bytes_to_np_array(self.audio_bytes_buffer)
+        logger.debug(f"audio arr shape: {audio_arr.shape}")
 
         audio_arr = nr.reduce_noise(y=audio_arr, sr=SAMPLE_RATE)
         prefixed_audio_arr = np.concatenate([self.audio_prefix["np_arr"], audio_arr])

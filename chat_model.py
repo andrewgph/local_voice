@@ -92,7 +92,6 @@ class LlamaChatModel(ChatModel):
             # Start new user message segment
             for t in mx.array(self.tokenizer.encode("<|start_header_id|>user<|end_header_id|>\n\n", add_special_tokens=False)):
                 _, self.kv_cache = self._model_call(t, self.kv_cache)
-            mx.eval(self.kv_cache)
         
         logger.debug(f"In state {self.state}, switching to USER_TURN")
         self.state = ChatModelState.USER_TURN
