@@ -3,6 +3,8 @@ import asyncio
 import logging
 import time
 
+from mlx_lm.utils import load as load_llm_model
+
 from audio_io import AudioIO
 from incremental_transcriber import IncrementalTranscriber
 from speech import SpeechGenerator
@@ -51,7 +53,7 @@ async def main():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
     logging.info("Loading Models ...")
-    chat_model = load_chat_model(args.mlxlm_model_path, args.log_dir)
+    llm_model, llm_tokenizer = load_llm_model(args.mlxlm_model_path)
     whisper_model = load_whisper_model(args.whisper_mlx_model_dir)
 
     logging.info("Initializing ...")
@@ -61,6 +63,7 @@ async def main():
     vad_checker = VADChecker(pubsub)
     transcriber = IncrementalTranscriber(pubsub, whisper_model, args.log_dir)
     speech_generator = SpeechGenerator(pubsub, audio_io)
+    chat_model = load_chat_model(llm_model, llm_tokenizer, args.log_dir)
     agent = VoiceChatAgent(pubsub, chat_model)
     
     logging.info("Starting input audio ...")
