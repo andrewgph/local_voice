@@ -3,7 +3,7 @@ import os
 import time
 
 import mlx.core as mx
-from mlx_lm.utils import load as load_llm_model
+
 
 import logging
 
@@ -26,8 +26,7 @@ class ResponseSegmentResult:
     is_complete: bool
 
 
-def load_chat_model(model_path, logs_dir):
-    model, tokenizer = load_llm_model(model_path)
+def load_chat_model(model, tokenizer, logs_dir):
     model_class_name = f"{model.__class__.__module__}.{model.__class__.__name__}"
     if model_class_name == "mlx_lm.models.llama.Model":
         return LlamaChatModel(model, tokenizer, logs_dir)
@@ -55,7 +54,7 @@ class LlamaChatModel(ChatModel):
     def __init__(self, llama_model, llama_tokenizer, logs_dir):
         os.makedirs(f"{logs_dir}/token_logs", exist_ok=True)
         timestamp_ms = int(time.time() * 1000)
-        self.token_log_file = f"{logs_dir}/token_logs/tokens_{timestamp_ms}.txt"
+        self.token_log_file = f"{logs_dir}/token_logs/chat_tokens_{timestamp_ms}.txt"
 
         self.model = llama_model
         self.tokenizer = llama_tokenizer
