@@ -12,9 +12,9 @@ logger = logging.getLogger(__name__)
 
 
 # Window size is 160 = 10 ms at 16kHz * 2 bytes per sample
-AUDIO_BYTES_WINDOW_SIZE = 160 * 2
+AUDIO_BYTES_WINDOW_SIZE = 160 * 2 * 3
 # Check last 100ms for VAD to identify pauses
-AUDIO_BYTES_VAD_CHECK_SIZE = AUDIO_BYTES_WINDOW_SIZE * 10
+AUDIO_BYTES_VAD_CHECK_SIZE = AUDIO_BYTES_WINDOW_SIZE * 3
 
 
 # TODO: assumes single channel audio
@@ -73,6 +73,8 @@ class VADChecker:
             # Only keep windows which contain speech
             for i in range(0, len(self.audio_bytes_vad_buffer), AUDIO_BYTES_VAD_CHECK_SIZE):
                 vad_check_bytes = self.audio_bytes_vad_buffer[i:i+AUDIO_BYTES_VAD_CHECK_SIZE]
+                if len(vad_check_bytes) < AUDIO_BYTES_VAD_CHECK_SIZE:
+                    vad_check_bytes = self.audio_bytes_vad_buffer[-AUDIO_BYTES_VAD_CHECK_SIZE:]
                 logger.debug(f"VAD checking window of size {len(vad_check_bytes)}")
                 if self._vad_check(vad_check_bytes):
                     logger.debug("VAD check found speech - adding to buffer")
