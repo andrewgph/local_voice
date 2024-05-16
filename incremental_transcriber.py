@@ -99,6 +99,7 @@ class IncrementalTranscriber:
                 if self.transcribe_task is not None:
                     logger.debug("Cancelling existing transcribe task")
                     self.transcribe_task.cancel()
+                    self.transcribe_task = None
 
                 self.audio_bytes_buffer += audio_bytes
                 logger.debug(f"Adding {len(audio_bytes)} bytes to buffer, new buffer size {len(self.audio_bytes_buffer)} bytes")
@@ -116,6 +117,7 @@ class IncrementalTranscriber:
 
             # Start a new transcription task only if it's not already running
             if self.transcribe_task is None:
+                logger.debug("Starting new transcribe task")
                 self.transcribe_task = asyncio.create_task(self._transcribe())
 
     async def _transcribe(self):
