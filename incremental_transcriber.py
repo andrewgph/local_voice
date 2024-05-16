@@ -6,6 +6,7 @@ import mlx.core as mx
 from webrtcvad import Vad
 import noisereduce as nr
 import os
+import json
 
 from events import EventType
 
@@ -41,8 +42,10 @@ def audio_bytes_to_np_array(bytes_data):
 
 class IncrementalTranscriber:
 
-    def __init__(self, pubsub, whisper_mlx_model, log_dir):
+    def __init__(self, pubsub, whisper_mlx_model, log_dir, calibration_dir="calibration"):
         self.log_dir = log_dir
+        self.calibration_dir = calibration_dir
+        os.makedirs(self.calibration_dir, exist_ok=True)
         self.whisper_mlx_model = whisper_mlx_model
         self.tokenizer = get_tokenizer(
             multilingual=whisper_mlx_model.is_multilingual,
@@ -64,10 +67,37 @@ class IncrementalTranscriber:
             "tokens": [],
             "np_arr": np.array([]),
         }
+        # Load a cached audio prefix if it exists
+        self._load_calibration_data()
 
         self.pubsub = pubsub
         self.pubsub.subscribe(EventType.HEARD_SPEAKING, self.handle_heard_speaking, priority=5)
         self.pubsub.subscribe(EventType.HEARD_NO_SPEAKING, self.handle_heard_no_speaking, priority=5)
+
+    def _load_calibration_data(self):
+        logger.debug("Attempting to load calibration data")
+        file_path = os.path.join(self.calibration_dir, 'audio_prefix_calibration.json')
+        try:
+            with open(file_path, 'r') as file:
+                audio_prefix_data = json.load(file)
+                self.audio_prefix['result_logprob'] = audio_prefix_data['result_logprob']
+                self.audio_prefix['tokens'] = audio_prefix_data['tokens']
+                self.audio_prefix['np_arr'] = np.array(audio_prefix_data['np_arr'])
+        except FileNotFoundError:
+            logger.warning(f"Calibration file not found at {file_path}. Using default calibration data.")
+        except json.JSONDecodeError:
+            logger.error(f"Error decoding JSON from the calibration file at {file_path}.")
+        except Exception as e:
+            logger.error(f"An error occurred while loading calibration data: {str(e)}")
+
+    def _save_calibration_data(self):
+        logger.debug("Attempting to save calibration data")
+        file_path = os.path.join(self.calibration_dir, 'audio_prefix_calibration.json')
+        with open(file_path, 'w') as file:
+            # Convert numpy array to list for JSON serialization
+            audio_prefix_copy = self.audio_prefix.copy()
+            audio_prefix_copy['np_arr'] = self.audio_prefix['np_arr'].tolist()
+            json.dump(audio_prefix_copy, file)
 
     def _start_transcriber(self):
         logger.debug("Starting transcriber")
@@ -193,17 +223,18 @@ class IncrementalTranscriber:
         # TODO: using a min tokens length threshold to avoid a high confidence segment that's too short
         result_prob = mx.exp(result_logprob).item()
         result_logprob = result_logprob.item()
-        if result_prob > 0.5 and len(result_tokens) >= 5 and (self.audio_prefix["result_logprob"] == 0 or self.audio_prefix["result_logprob"] < result_logprob):
+        if result_prob > 0.25 and len(result_tokens) >= 5 and (self.audio_prefix["result_logprob"] == 0 or self.audio_prefix["result_logprob"] < result_logprob):
             self.audio_prefix["result_logprob"] = result_logprob
             self.audio_prefix["tokens"] = result_tokens
             self.audio_prefix["np_arr"] = audio_arr
             logger.info(f"New audio prefix: logprob={self.audio_prefix['result_logprob']} tokens={self.audio_prefix['tokens']}")
+            self._save_calibration_data()
 
         end_time = time.time()
         whisper_time_ms = int(1000 * (end_time - start_time))
 
         text = self.tokenizer.decode(result_tokens) if result_tokens else ""
-        logger.info(f"whisper: {whisper_time_ms}ms : {text}")
+        logger.info(f"whisper: {whisper_time_ms}ms : {text} ({result_prob:.2f})")
 
         return text
 
