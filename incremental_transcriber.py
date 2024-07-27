@@ -148,6 +148,7 @@ class IncrementalTranscriber:
             "np_arr": np.array([]),
         }
         # Load a cached audio prefix if it exists
+        self.allow_calibration_update = True
         self._load_calibration_data()
 
         self.pubsub = pubsub
@@ -163,6 +164,8 @@ class IncrementalTranscriber:
                 self.audio_prefix['result_logprob'] = audio_prefix_data['result_logprob']
                 self.audio_prefix['tokens'] = audio_prefix_data['tokens']
                 self.audio_prefix['np_arr'] = np.array(audio_prefix_data['np_arr'])
+                # Don't update existing calibration data that was created before this session
+                self.allow_calibration_update = False
         except FileNotFoundError:
             logger.warning(f"Calibration file not found at {file_path}. Using default calibration data.")
         except json.JSONDecodeError:
@@ -172,7 +175,7 @@ class IncrementalTranscriber:
 
     def _save_calibration_data(self):
         logger.debug("Attempting to save calibration data")
-        file_path = os.path.join(self.calibration_dir, 'audio_prefix_calibration.json')
+        file_path = os.path.join(self.calibration_dir, 'audio_prefix.json')
         with open(file_path, 'w') as file:
             # Convert numpy array to list for JSON serialization
             audio_prefix_copy = self.audio_prefix.copy()
@@ -253,7 +256,11 @@ class IncrementalTranscriber:
             self.audio_prefix
         )
 
-        if transcription_result.prob > 0.25 and len(transcription_result.tokens) >= 5 and (self.audio_prefix["result_logprob"] == 0 or self.audio_prefix["result_logprob"] < transcription_result.logprob):
+        # Include a min token length as otherwise there is a bias towards shorter transcriptions which have higher probability
+        if self.allow_calibration_update and \
+            transcription_result.prob > 0.25 and \
+            len(transcription_result.tokens) >= 5 and \
+            (self.audio_prefix["result_logprob"] == 0 or self.audio_prefix["result_logprob"] < transcription_result.logprob):
             self.audio_prefix["result_logprob"] = transcription_result.logprob
             self.audio_prefix["tokens"] = transcription_result.tokens
             self.audio_prefix["np_arr"] = transcription_result.audio_arr
