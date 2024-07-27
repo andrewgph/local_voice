@@ -38,6 +38,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Evaluate audio file.')
     parser.add_argument('--whisper_mlx_model_dir', type=str, help='Path to the whisper mlx model.')
     parser.add_argument('--mlxlm_model_path', type=str, help='Path to the mlx lm model.')
+    parser.add_argument('--piper_model_dir', type=str, help='Path to the piper model.')
     parser.add_argument('--device_name', type=str, default=None, help='Name for the input audio device.')
     parser.add_argument('--log_dir', type=str, default="logs", help='Directory for speech and chat logs.')
     parser.add_argument('--log_level', type=str, default='INFO',
@@ -62,7 +63,7 @@ async def main():
     audio_io = AudioIO(pubsub, device_name_like=args.device_name)
     vad_checker = VADChecker(pubsub)
     transcriber = IncrementalTranscriber(pubsub, whisper_model, args.log_dir)
-    speech_generator = SpeechGenerator(pubsub, audio_io)
+    speech_generator = SpeechGenerator(pubsub, audio_io, args.piper_model_dir)
     chat_model = load_chat_model(llm_model, llm_tokenizer, args.log_dir)
     agent = VoiceChatAgent(pubsub, chat_model)
     
