@@ -13,10 +13,11 @@ logger = logging.getLogger(__name__)
 
 class SpeechGenerator:
 
-    def __init__(self, pubsub, audio_io):
+    def __init__(self, pubsub, audio_io, piper_model_dir):
         self.voice = PiperVoice.load(
-            model_path="/Users/andrew/Downloads/en_US-amy-medium.onnx",
-            config_path="/Users/andrew/Downloads/en_en_US_amy_medium_en_US-amy-medium.onnx.json")
+            model_path=piper_model_dir + "/voice.onnx",
+            config_path=piper_model_dir + "/voice.json"
+        )
         
         self.pubsub = pubsub
         # Higher priority for heard speech so speech is interupted asap
