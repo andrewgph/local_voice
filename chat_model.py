@@ -89,6 +89,8 @@ class LlamaChatModel(ChatModel):
         mx.eval(self.model(mx.array(input_ids)[None], self.kv_cache))
     
     def add_user_message_segment(self, text):
+        start_time = time.time()
+
         if self.state == ChatModelState.ASSISTANT_TURN:
             logger.debug("Interruption detected, closing assistant segment")
             # Close out response attempt
@@ -110,11 +112,17 @@ class LlamaChatModel(ChatModel):
         mx.eval(self.last_logits)
         logger.debug("Updated LLM cache")
 
+        end_time = time.time()
+        generation_time = (end_time - start_time) * 1000  # Convert to milliseconds
+        logger.info(f"LLM adding user message segment took {generation_time:.2f} ms")
+
     def prob_end_of_user_message(self):
         probs = self.last_logits[0, -1, self.tokenizer.eos_token_id] - mx.logsumexp(self.last_logits[0, -1], axis=-1)
         return mx.exp(probs).item()
 
     def generate_response_segment(self, response_tokens_so_far, next_response_token, num_tokens):
+        start_time = time.time()
+
         is_response_finished = False
         say_response_so_far = False
         found_punctuation = False
@@ -168,6 +176,10 @@ class LlamaChatModel(ChatModel):
 
             logger.debug(f"In state {self.state}, switching to WAITING")
             self.state = ChatModelState.WAITING
+
+        end_time = time.time()
+        generation_time = (end_time - start_time) * 1000  # Convert to milliseconds
+        logger.info(f"LLM response segment generation took {generation_time:.2f} ms")
 
         return ResponseSegmentResult(
             text=self.tokenizer.decode(response_tokens_so_far),

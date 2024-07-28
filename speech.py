@@ -50,7 +50,7 @@ class SpeechGenerator:
     def generate_speech(self, text):
         start_time = time.time()
         speech_arr = self._predict(text)
-        logger.info(f"Speech generation took {int((time.time() - start_time) * 1000)} milliseconds")    
+        logger.info(f"Speech generation took {int((time.time() - start_time) * 1000)} ms")    
         return speech_arr
 
     def _predict(self, text):
