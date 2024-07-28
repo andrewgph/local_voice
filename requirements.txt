@@ -1,0 +1,8 @@
+pyaudio
+numpy
+webrtcvad
+mlx
+mlx-lm
+onnxruntime
+librosa
+scipy
