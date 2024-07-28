@@ -3,7 +3,7 @@ import os
 import time
 
 import mlx.core as mx
-
+from mlx_lm.models.base import KVCache
 
 import logging
 
@@ -24,45 +24,6 @@ class ResponseSegmentResult:
     next_response_token: int
     say_segment: bool
     is_complete: bool
-
-# https://github.com/ml-explore/mlx-examples/blob/85dc76f6e0f2cf3ee3d84c211868a6856e163f3f/llms/mlx_lm/models/base.py#L9
-class KVCache:
-
-    def __init__(self, head_dim, n_kv_heads):
-        self.n_kv_heads = n_kv_heads
-        if isinstance(head_dim, int):
-            self.k_head_dim = self.v_head_dim = head_dim
-        elif isinstance(head_dim, tuple) and len(head_dim) == 2:
-            self.k_head_dim, self.v_head_dim = head_dim
-        else:
-            raise ValueError("head_dim must be an int or a tuple of two ints")
-        self.keys = None
-        self.values = None
-        self.offset = 0
-        self.step = 256
-
-    def update_and_fetch(self, keys, values):
-        prev = self.offset
-        if self.keys is None or (prev + keys.shape[2]) > self.keys.shape[2]:
-            B = keys.shape[0]
-            n_steps = (self.step + keys.shape[2] - 1) // self.step
-            k_shape = (B, self.n_kv_heads, n_steps * self.step, self.k_head_dim)
-            v_shape = (B, self.n_kv_heads, n_steps * self.step, self.v_head_dim)
-            new_k = mx.zeros(k_shape, keys.dtype)
-            new_v = mx.zeros(v_shape, values.dtype)
-            if self.keys is not None:
-                if prev % self.step != 0:
-                    self.keys = self.keys[..., :prev, :]
-                    self.values = self.values[..., :prev, :]
-                self.keys = mx.concatenate([self.keys, new_k], axis=2)
-                self.values = mx.concatenate([self.values, new_v], axis=2)
-            else:
-                self.keys, self.values = new_k, new_v
-
-        self.offset += keys.shape[2]
-        self.keys[..., prev : self.offset, :] = keys
-        self.values[..., prev : self.offset, :] = values
-        return self.keys[..., : self.offset, :], self.values[..., : self.offset, :]
 
 
 def load_chat_model(model, tokenizer, logs_dir):
@@ -131,20 +92,21 @@ class LlamaChatModel(ChatModel):
         if self.state == ChatModelState.ASSISTANT_TURN:
             logger.debug("Interruption detected, closing assistant segment")
             # Close out response attempt
-            self._model_call(mx.array(self.tokenizer.encode("<|eot_id|>", add_special_tokens=False)), self.kv_cache)
+            tokens = mx.array(self.tokenizer.encode("<|eot_id|>", add_special_tokens=False))
+            self._model_call(tokens, self.kv_cache)
         
         if self.state != ChatModelState.USER_TURN:
             logger.debug("Starting new user message segment")
             # Start new user message segment
-            for t in mx.array(self.tokenizer.encode("<|start_header_id|>user<|end_header_id|>\n\n", add_special_tokens=False)):
-                self._model_call(t, self.kv_cache)
+            tokens = mx.array(self.tokenizer.encode("<|start_header_id|>user<|end_header_id|>\n\n", add_special_tokens=False))
+            self._model_call(tokens, self.kv_cache)
         
         logger.debug(f"In state {self.state}, switching to USER_TURN")
         self.state = ChatModelState.USER_TURN
 
         logger.debug(f"Updating LLM cache with: {text}")
-        for t in mx.array(self.tokenizer.encode(text, add_special_tokens=False)):
-            self.last_logits = self._model_call(t, self.kv_cache)
+        tokens = mx.array(self.tokenizer.encode(text, add_special_tokens=False))
+        self.last_logits = self._model_call(tokens, self.kv_cache)[:, -1:, :]
         mx.eval(self.last_logits)
         logger.debug("Updated LLM cache")
 
@@ -160,8 +122,8 @@ class LlamaChatModel(ChatModel):
         if self.state != ChatModelState.ASSISTANT_TURN:
             logger.debug(f"In state {self.state}, switching to ASSISTANT_TURN, starting new response segment")
             response_tokens_so_far = []
-            for t in mx.array(self.tokenizer.encode("<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", add_special_tokens=False)):
-                logits = self._model_call(t, self.kv_cache)
+            tokens = mx.array(self.tokenizer.encode("<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n", add_special_tokens=False))
+            logits = self._model_call(tokens, self.kv_cache)[:, -1:, :]
             next_response_token = mx.argmax(logits.squeeze(1), axis=-1)
             logger.debug("Added response tokens")
 
@@ -199,9 +161,8 @@ class LlamaChatModel(ChatModel):
         if is_response_finished:
             logger.debug("Finished response - ending assistant section")
             # Close out response in LLM cache
-            self._model_call(mx.array([self.tokenizer.eos_token_id]), self.kv_cache)
-            for t in mx.array(self.tokenizer.encode("<|eot_id|>", add_special_tokens=False)):
-                self._model_call(t, self.kv_cache)
+            tokens = mx.array(self.tokenizer.encode("<|eot_id|>", add_special_tokens=False))
+            mx.eval(self._model_call(tokens, self.kv_cache))
 
             say_response_so_far = True
 
@@ -216,9 +177,9 @@ class LlamaChatModel(ChatModel):
             is_complete=is_response_finished
         )
 
-    def _model_call(self, token, llm_cache):
-        self._log_tokens([token.item()])
-        return self.model(token.reshape(1, 1), llm_cache)
+    def _model_call(self, tokens, llm_cache):
+        self._log_tokens([token.item() for token in tokens])
+        return self.model(tokens[None], llm_cache)
 
     def _log_tokens(self, tokens):
         with open(self.token_log_file, "a") as file:
