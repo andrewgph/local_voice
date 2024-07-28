@@ -29,9 +29,13 @@ class SpeechGenerator:
 
     async def handle_response_text_generated(self, response_text):
         logger.debug(f"Handling response text generated: {response_text}")
-        
+
+        if len(response_text.strip()) == 0:
+            logger.debug("Response text is empty - skipping speech generation")
+            return
+
         self.is_generating_speech = True
-        speech_arr = self.generate_speech(response_text)
+        speech_arr = self._generate_speech(response_text)
         self.is_generating_speech = False
         
         if self.discard_generated_speech:
@@ -47,15 +51,8 @@ class SpeechGenerator:
             self.discard_generated_speech = True
         self.stop_speaking()
 
-    def generate_speech(self, text):
+    def _generate_speech(self, text):
         start_time = time.time()
-        speech_arr = self._predict(text)
-        logger.info(f"Speech generation took {int((time.time() - start_time) * 1000)} ms")    
-        return speech_arr
-
-    def _predict(self, text):
-        if len(text.strip()) == 0:
-            return None
         
         results = []
         for result in self.voice.synthesize_stream_raw(text):
@@ -70,6 +67,7 @@ class SpeechGenerator:
         speech_arr = librosa.resample(speech_arr, orig_sr=original_sr, target_sr=target_sr)
         logger.debug(f"Resampled speech array from {original_sr} to {target_sr} shape: {speech_arr.shape}")
 
+        logger.info(f"Speech generation took {int((time.time() - start_time) * 1000)} ms")
         return speech_arr
 
     def play_speech(self, speech_arr):
