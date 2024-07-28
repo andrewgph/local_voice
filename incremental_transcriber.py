@@ -209,11 +209,15 @@ class IncrementalTranscriber:
 
             if audio_bytes is not None:
                 # Cancel any existing transcribe task if we have new speech audio before it completes
+                # TODO: only relevant if the transcription is done in separate thread, otherwise the
+                # the transcription is blocking new VAD, so new audio wont be sent anyway.
                 if self.transcribe_task is not None:
                     logger.debug("Cancelling existing transcribe task")
                     self.transcribe_task.cancel()
                     self.transcribe_task = None
 
+                # Add new speech bytes to the buffer and then wait for a None audio_bytes to indicate
+                # that the user has stopped speaking.
                 self.audio_bytes_buffer += audio_bytes
                 logger.debug(f"Adding {len(audio_bytes)} bytes to buffer, new buffer size {len(self.audio_bytes_buffer)} bytes")
                 continue
@@ -228,10 +232,10 @@ class IncrementalTranscriber:
                 logger.debug(f"Audio bytes buffer too small to transcribe: {len(self.audio_bytes_buffer)} bytes")
                 continue
 
-            # Start a new transcription task only if it's not already running
-            if self.transcribe_task is None:
-                logger.debug("Starting new transcribe task")
-                self.transcribe_task = asyncio.create_task(self._transcribe())
+            # Transcribe task should have been cancelled if there is audio to transcribe and the user has stopped speaking
+            assert self.transcribe_task is None, "Transcribe task already running"
+            logger.debug("Starting new transcribe task")
+            self.transcribe_task = asyncio.create_task(self._transcribe())
 
     async def _transcribe(self):
         # TODO: Move transcription to a separate thread so the MLX operations don't block other asyncio tasks
