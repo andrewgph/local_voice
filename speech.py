@@ -21,6 +21,9 @@ class SpeechGenerator:
         
         self.pubsub = pubsub
         # Higher priority for heard speech so speech is interupted asap
+        # TODO: It would be better if interuptions were triggered by VAD speech detection
+        # as waiting for transcription adds delay. But the VAD precision is too low to be
+        # useful.
         self.pubsub.subscribe(EventType.HEARD_SPEECH, self.handle_heard_speech, priority=1)
         self.pubsub.subscribe(EventType.RESPONSE_TEXT_GENERATED, self.handle_response_text_generated)
         self.is_generating_speech = False
