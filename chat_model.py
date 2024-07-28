@@ -50,6 +50,13 @@ class ChatModel:
 
 
 class LlamaChatModel(ChatModel):
+    """
+    Llama 3 instruct chat model.
+    
+    This code is specific to Llama 3 as it depends upon the Llama 3 token format for chat.
+    The tokenizer chat template isn't used as we want to control when the tokens are added
+    for turn taking.
+    """
 
     def __init__(self, llama_model, llama_tokenizer, logs_dir):
         os.makedirs(f"{logs_dir}/token_logs", exist_ok=True)
