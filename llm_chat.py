@@ -49,7 +49,6 @@ class VoiceChatAgent:
         self.is_running = False
         self.process_events_task = None
         self.response_task = None
-        self.last_user_query = ""
 
         self.chat_model.initialize(INIT_PROMPT, INIT_EVENTS)
         self.state = AgentState.WAITING
@@ -120,7 +119,6 @@ class VoiceChatAgent:
         self.state = AgentState.LISTENING
 
         self.chat_model.add_user_message_segment(transcript)
-        self.last_user_query += transcript + " "
 
     async def _generate_response(self):
         logger.debug("Generating response")
@@ -150,10 +148,6 @@ class VoiceChatAgent:
 
             logger.debug(f"In state {self.state}, switching to RESPONDING")
             self.state = AgentState.RESPONDING
-
-            # TODO: run tool model using self.last_user_query
-            
-            self.last_user_query = ""
 
             response_segment_result = self.chat_model.generate_response_segment(
                 response_tokens_so_far, next_response_token, num_tokens=NUM_TOKENS_RESPONSE_PAUSE)
