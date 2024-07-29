@@ -97,18 +97,21 @@ class LlamaChatModel(ChatModel):
     
     def add_user_message_segment(self, text):
         start_time = time.time()
+        num_tokens_added = 0
 
         if self.state == ChatModelState.ASSISTANT_TURN:
             logger.debug("Interruption detected, closing assistant segment")
             # Close out response attempt
             tokens = mx.array(self.tokenizer.encode("<|eot_id|>", add_special_tokens=False))
             self._model_call(tokens, self.kv_cache)
+            num_tokens_added += len(tokens)
         
         if self.state != ChatModelState.USER_TURN:
             logger.debug("Starting new user message segment")
             # Start new user message segment
             tokens = mx.array(self.tokenizer.encode("<|start_header_id|>user<|end_header_id|>\n\n", add_special_tokens=False))
             self._model_call(tokens, self.kv_cache)
+            num_tokens_added += len(tokens)
         
         logger.debug(f"In state {self.state}, switching to USER_TURN")
         self.state = ChatModelState.USER_TURN
@@ -117,11 +120,13 @@ class LlamaChatModel(ChatModel):
         tokens = mx.array(self.tokenizer.encode(text, add_special_tokens=False))
         self.last_logits = self._model_call(tokens, self.kv_cache)[:, -1:, :]
         mx.eval(self.last_logits)
+        num_tokens_added += len(tokens)
         logger.debug("Updated LLM cache")
 
         end_time = time.time()
         generation_time = (end_time - start_time) * 1000  # Convert to milliseconds
-        logger.info(f"LLM adding user message segment took {generation_time:.2f} ms")
+        tokens_per_second = (num_tokens_added / generation_time) * 1000  # Convert ms to seconds
+        logger.info(f"LLM adding user message segment took {generation_time:.2f} ms, added {num_tokens_added} tokens ({tokens_per_second:.2f} tokens/s)")
 
     def prob_end_of_user_message(self):
         probs = self.last_logits[0, -1, self.tokenizer.eos_token_id] - mx.logsumexp(self.last_logits[0, -1], axis=-1)
@@ -129,6 +134,7 @@ class LlamaChatModel(ChatModel):
 
     def generate_response_segment(self, response_tokens_so_far, next_response_token, num_tokens):
         start_time = time.time()
+        num_tokens_added = 0
 
         is_response_finished = False
         say_response_so_far = False
@@ -141,6 +147,7 @@ class LlamaChatModel(ChatModel):
             logits = self._model_call(tokens, self.kv_cache)[:, -1:, :]
             next_response_token = mx.argmax(logits.squeeze(1), axis=-1)
             logger.debug("Added response tokens")
+            num_tokens_added += len(tokens)
 
         logger.debug(f"In state {self.state}, switching to ASSISTANT_TURN")
         self.state = ChatModelState.ASSISTANT_TURN
@@ -163,6 +170,7 @@ class LlamaChatModel(ChatModel):
 
             logits = self._model_call(next_response_token, self.kv_cache)
             next_response_token = mx.argmax(logits.squeeze(1), axis=-1)
+            num_tokens_added += 1
 
         if found_punctuation:
             logger.debug("Found punctuation indicating end of a sentence")
@@ -171,6 +179,7 @@ class LlamaChatModel(ChatModel):
             # Generate a new next token to avoid immediately breaking on next iteration
             logits = self._model_call(next_response_token, self.kv_cache)
             next_response_token = mx.argmax(logits.squeeze(1), axis=-1)
+            num_tokens_added += 1
             mx.eval(next_response_token)
         
         if is_response_finished:
@@ -178,6 +187,7 @@ class LlamaChatModel(ChatModel):
             # Close out response in LLM cache
             tokens = mx.array(self.tokenizer.encode("<|eot_id|>", add_special_tokens=False))
             mx.eval(self._model_call(tokens, self.kv_cache))
+            num_tokens_added += len(tokens)
 
             say_response_so_far = True
 
@@ -186,7 +196,8 @@ class LlamaChatModel(ChatModel):
 
         end_time = time.time()
         generation_time = (end_time - start_time) * 1000  # Convert to milliseconds
-        logger.info(f"LLM response segment generation took {generation_time:.2f} ms")
+        tokens_per_second = (num_tokens_added / generation_time) * 1000  # Convert ms to seconds
+        logger.info(f"LLM response segment generation took {generation_time:.2f} ms, added {num_tokens_added} tokens ({tokens_per_second:.2f} tokens/s)")
 
         return ResponseSegmentResult(
             text=self.tokenizer.decode(response_tokens_so_far),
