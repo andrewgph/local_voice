@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+
+# Jupyter Notebook data files
+notebooks/*.json
+
+# Calibration data
+calibration/*
+
+# Logs
+logs/*
+
+# Models
+models/*
