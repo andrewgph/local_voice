@@ -6,19 +6,19 @@ An implementation of a Voice Activity Detection -> Speech to Text -> LLM -> Text
 
 The speech to speech times are ok for basic conversation. The main challenge with making it more useful is reducing speech to text errors, especially on short utterances. The pipeline approach is probably obsolete with upcoming multimodal models, although it might have some advantages, such as easier visibility into what was heard.
 
-Features
+Features:
 * Speech to speech times in 500ms to 1500ms range on a M2 Max
- * Within conversational speech latency
- * Using Whisper large v3 + Llama 3 8B (both with mlx 4 bit quantization)
+  * Within conversational speech latency
+  * Using Whisper large v3 + Llama 3 8B (both with mlx 4 bit quantization)
 * Interuptible, will stop talking as soon as new speech has been heard
 * Should be possible to make it multilingual
- * Whisper model is multilingual
- * Llama 3 understands multiple languages
- * Piper has voices available in different languages
+  * Whisper model is multilingual
+  * Llama 3 understands multiple languages
+  * Piper has voices available in different languages
 * Relatively minimal dependencies, the models are doing most of the work
 * Various logs are saved, so you can collect audio and transcription data for model evaluation or improvements
 
-Caveats
+Caveats:
 * The codebase is fairly hacky, so might it might require some work to get it working for you
 * Doesn't filter out its own voice, so will only work when using a headset or speakers which include echo cancellation
 * Doesn't work with multiple speakers, the LLM will get confused with two separate people talking
@@ -27,10 +27,10 @@ Caveats
 
 ## Overview
 
-Architecture
+Architecture:
 * Uses a crude Actor model to separate out components and handle communication between them using pubsub
 * Python asyncio to interleave model computations between components
- * For example LLM decoding will pause after every token to allow STT to check if there is an interruption
+  * For example LLM decoding will pause after every token to allow STT to check if there is an interruption
 
 VAD (Voice Activity Detection)
 * Uses the webrtcvad implementation of webrtc vad algorithm
@@ -164,7 +164,7 @@ Output should look similar to:
 
 ## Acknowledgements
 
-This project wouldn't be possible without the underlying models:
+This project wouldn't be possible without the underlying models and MLX:
 
 * [Whisper](https://github.com/openai/whisper)
 * [mlx](https://github.com/ml-explore/mlx)
