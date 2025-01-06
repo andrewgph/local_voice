@@ -42,40 +42,40 @@ VAD (Voice Activity Detection)
 Speech to Text
 * Whisper mlx implementation
 * Dynamically reduces the size of the audio encoder to match audio length
- * Found that this didn't seem to impact accuracy on audio clips >5 seconds long, evaluated on fleurs dataset
- * Significantly improves latency
+  * Found that this didn't seem to impact accuracy on audio clips >5 seconds long, evaluated on fleurs dataset
+  * Significantly improves latency
 * Uses an audio clip with a known transcription to improve accuracy on short utterances (like "Hello" or "How are you?")
- * This audio clip is prepended to the new audio and decoding assumes the provided transcription is correct, rather than sampling
- * Evaluation in notebooks/audio_prefix_analysis.ipynb suggests this works best when it's recorded with your voice and microphone
- * The clip is collected automatically if an audio prefix is not provided
- * This technique seemed to reduce the problems of hallucination on audio without speech
-* Using audio prefix Word Error Rates are around 15% for short utterances
- * Subjectively seemed a lot better for longer speech
- * The error rate is low enough that you can have a short conversation, but not good enough for something like reliable voice commands
+  * This audio clip is prepended to the new audio and decoding assumes the provided transcription is correct, rather than sampling
+  * Evaluation in notebooks/audio_prefix_analysis.ipynb suggests this works best when it's recorded with your voice and microphone
+  * The clip is collected automatically if an audio prefix is not provided
+  * This technique seemed to reduce the problems of hallucination on audio without speech
+* Word Error Rates for short utterances were around 15% using audio prefix compared to 30% without
+  * Subjectively seemed a lot better for longer speech
+  * The error rate is low enough that you can have a short conversation, but not good enough for something like reliable voice commands
 
 LLM
 * Llama 3 8B instruct model
- * Works well for simple conversations, can ask some interesting questions and get good responses
+  * Works well for simple conversations, can ask some interesting questions and get good responses
 * KV caching is used to keep track of the conversation, so only minimal updates are needed for each new segment of transcribed speech
 * Uses the model to estimate when the user has finished speaking
- * If the most likely next token is the end of user segment, the model will start generating a response
+  * If the most likely next token is the end of user segment token, the model will start generating a response
 * Generates response tokens in chunks, pausing to allow other components in the pipeline to process
 * Sends response text asap to speech component, stopping whenever punctuation is detected
 * Prompting encourages a short initial phrase (like "Ok," or "Sorry,") so a first word or short phrase is spoken asap in response
 * There is a lot of code to track conversational state
- * You could probably remove this by fine tuning the logic into the LLM
+  * You could probably remove this by fine tuning the logic into the LLM
 
 Text to Speech
 * Rhasspy Piper model
- * Works great, this was previously one of the slowest parts of the pipeline, now speech generation usually within 100ms
+  * Works great, this was previously one of the slowest parts of the pipeline, now speech generation usually within 100ms
 * Depends upon espeak for converting text to phonemes
- * Assumed to be found at ```/opt/homebrew/bin/espeak```
+  * Assumed to be found at ```/opt/homebrew/bin/espeak```
 * A minimal version of the onnx inference is included in min_rhasspy_piper/voice.py so there is no direct dependency on the rhasspy/piper project
 * Interruptions immediately stop speech generation, without the LLM being involved in that decision
- * Speech audio is played out in segments of 100ms, the queue is cleared out immediately on interruption
+  * Speech audio is played out in segments of 100ms, the queue is cleared out immediately on interruption
 
 
-A typical speech to speech latency breakdown looks like (TODO)
+A typical speech to speech latency breakdown looks like:
 * STT: ~300ms
 * LLM: ~400ms
 * TTS: ~100ms 
